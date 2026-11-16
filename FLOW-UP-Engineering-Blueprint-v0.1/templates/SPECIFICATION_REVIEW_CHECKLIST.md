@@ -1,0 +1,21 @@
+# Specification Review Checklist
+
+- [ ] Stable ID, parent ID, version, status, owner present
+- [ ] Purpose and user outcome clear
+- [ ] In-scope and out-of-scope explicit
+- [ ] Terms match Glossary
+- [ ] Inputs/outputs and nullability defined
+- [ ] Business rules and invariants numbered
+- [ ] State transitions defined
+- [ ] Dependencies listed and direction valid
+- [ ] Contracts referenced and versioned
+- [ ] Authorization and data ownership defined
+- [ ] Error and edge cases covered
+- [ ] UI states included where applicable
+- [ ] Acceptance criteria testable
+- [ ] Unit/integration/security/E2E tests identified
+- [ ] Parent index updated
+- [ ] Dependency/contract/traceability registries updated
+- [ ] Change impact reviewed
+- [ ] No contradiction with approved ADRs
+- [ ] Remaining unknowns explicitly listed
