@@ -499,11 +499,342 @@ APPLICATION / BACKEND
 
 ### B01. Authentication & User Context
 
-Initial responsibilities:
-- Integrate the selected authentication provider.
-- Resolve the authenticated user context.
-- Enforce authenticated access to personal data.
-- Handle session and authentication errors.
+**Architecture Status:** PROPOSED  
+**Development Status:** NOT_STARTED  
+**Priority:** MVP - REQUIRED
+
+#### 1. Purpose
+
+B01 chịu trách nhiệm quản lý quy trình xác thực người dùng và cung cấp User Context thống nhất cho toàn bộ ứng dụng FLOW-UP.
+
+Module này bảo đảm:
+- Người dùng có thể đăng ký, đăng nhập và đăng xuất.
+- Hệ thống xác định được người dùng hiện tại.
+- Các module nghiệp vụ có thể nhận diện người dùng đang thực hiện thao tác.
+- Mỗi người dùng chỉ được truy cập dữ liệu thuộc phạm vi quyền hạn của mình.
+- Các module nghiệp vụ không phụ thuộc trực tiếp vào Authentication Provider.
+
+#### 2. Scope
+
+**Included:**
+- User Registration.
+- User Login.
+- User Logout.
+- Session Management.
+- Current User Resolution.
+- Internal User Identity Mapping.
+- Authentication State.
+- Authentication Error Handling.
+- Integration with Personal Workspace initialization.
+
+**Excluded:**
+- Quản lý thông tin hồ sơ người dùng nâng cao.
+- Team accounts và multi-user workspace.
+- Role-based access control phức tạp.
+- Social login.
+- Multi-factor authentication.
+- Quản lý subscription và billing.
+
+#### 3. Submodules
+
+##### B01.1. User Registration
+
+**Responsibility:** Tạo tài khoản mới cho người dùng.
+
+Inputs:
+- Email.
+- Password.
+- Password confirmation (client-side validation).
+
+Processing:
+1. Nhận thông tin đăng ký.
+2. Validate dữ liệu đầu vào.
+3. Kiểm tra định dạng email.
+4. Kiểm tra yêu cầu tối thiểu đối với mật khẩu.
+5. Gửi yêu cầu tạo tài khoản tới Authentication Provider.
+6. Xử lý kết quả đăng ký.
+7. Thiết lập hoặc liên kết Internal User Identity.
+8. Khởi tạo Personal Workspace thông qua B02 khi điều kiện xác thực phù hợp.
+
+Expected outcomes:
+- Registration successful.
+- Email already registered.
+- Invalid input.
+- Weak password.
+- Provider error.
+- Email verification required.
+
+Business rules:
+- Email phải đáp ứng quy tắc định dạng hợp lệ.
+- Không lưu mật khẩu dạng plaintext.
+- Không tự tạo hai Internal User cho cùng một tài khoản đã được liên kết.
+- Không giả định đăng ký thành công đồng nghĩa với việc phiên đăng nhập đã được thiết lập.
+
+##### B01.2. User Login
+
+**Responsibility:** Xác thực người dùng và thiết lập phiên làm việc.
+
+Inputs:
+- Email.
+- Password.
+
+Processing:
+1. Validate input.
+2. Gửi thông tin xác thực tới Authentication Provider.
+3. Nhận kết quả xác thực.
+4. Thiết lập hoặc khôi phục session.
+5. Resolve Internal User Identity.
+6. Cung cấp User Context cho ứng dụng.
+
+Expected outcomes:
+- Login successful.
+- Invalid credentials.
+- Account unavailable.
+- Email verification required.
+- Provider unavailable.
+- Rate limit exceeded.
+
+Business rules:
+- Không tiết lộ tài khoản có tồn tại hay không thông qua lỗi không cần thiết.
+- Không lưu mật khẩu trong application database.
+- Không để frontend tự xác nhận trạng thái authenticated chỉ dựa trên dữ liệu local.
+
+##### B01.3. User Logout
+
+**Responsibility:** Kết thúc phiên làm việc của người dùng.
+
+Processing:
+1. Gửi yêu cầu logout tới Authentication Provider.
+2. Hủy hoặc vô hiệu hóa session theo cơ chế provider.
+3. Xóa trạng thái xác thực khỏi application state.
+4. Chuyển người dùng về màn hình đăng nhập hoặc trang công khai.
+
+Expected outcomes:
+- Logout successful.
+- Session already expired.
+- Provider error.
+
+Business rules:
+- Sau khi logout, người dùng không được tiếp tục truy cập các chức năng yêu cầu authentication.
+- UI phải cập nhật trạng thái ngay sau khi logout thành công.
+
+##### B01.4. Session Management
+
+**Responsibility:** Duy trì và kiểm tra trạng thái phiên xác thực.
+
+Required capabilities:
+- Retrieve current session.
+- Restore session after page refresh.
+- Detect expired session.
+- Detect invalid session.
+- Refresh session when supported.
+- Terminate session.
+- Handle provider unavailable.
+
+Authentication states:
+
+| State | Meaning |
+|---|---|
+| UNKNOWN | Chưa xác định trạng thái xác thực |
+| AUTHENTICATED | Người dùng đã xác thực |
+| UNAUTHENTICATED | Không có phiên xác thực |
+| SESSION_EXPIRED | Phiên đã hết hạn |
+| SESSION_INVALID | Phiên không hợp lệ |
+
+Business rules:
+- Khi ứng dụng khởi động, trạng thái ban đầu là UNKNOWN.
+- Không hiển thị dữ liệu cá nhân trước khi xác định được User Context hợp lệ.
+- Khi session hết hạn, các thao tác cần xác thực phải bị từ chối.
+- Không tự động chuyển SESSION_INVALID thành AUTHENTICATED nếu chưa xác minh lại.
+
+##### B01.5. Internal User Identity
+
+**Responsibility:** Cung cấp định danh nội bộ ổn định cho toàn bộ hệ thống.
+
+Required fields (logical model):
+
+| Field | Description |
+|---|---|
+| user_id | Internal User ID |
+| provider | Authentication Provider identifier |
+| provider_user_id | User ID do provider cấp |
+| email | Email đã xác thực hoặc email được provider xác nhận |
+| created_at | Thời điểm tạo liên kết |
+| updated_at | Thời điểm cập nhật |
+
+Rules:
+- Internal User ID là định danh được sử dụng trong Domain và Application.
+- Provider User ID chỉ phục vụ tích hợp Authentication.
+- Không dùng provider-specific user object làm Domain User object.
+- Một Internal User có thể được ánh xạ với một identity provider theo thiết kế MVP.
+- Việc liên kết nhiều provider cho cùng một người dùng là Future Scope.
+- Không tự động hợp nhất tài khoản chỉ dựa trên email trùng nhau.
+
+##### B01.6. Current User Context
+
+**Responsibility:** Cung cấp thông tin người dùng hiện tại cho các module nghiệp vụ.
+
+Proposed User Context:
+
+- Internal User ID.
+- Authentication status.
+- Verified email (when available).
+- Session metadata cần thiết.
+
+Consumers:
+- B02 Workspace & Project Management.
+- B03 Goal Management.
+- B04 Milestone Management.
+- B05 Action Management.
+- B06 Measurement Management.
+- B07 Planning & Scheduling.
+- B08 Progress Engine.
+- B09 Review Management.
+- B10 AI Orchestration.
+
+Rules:
+- Module nghiệp vụ chỉ sử dụng Internal User ID.
+- Không yêu cầu từng module tự gọi Authentication Provider.
+- User Context phải được xác minh tại trusted application boundary.
+- Client-provided user_id không được xem là bằng chứng xác thực.
+
+##### B01.7. Authentication Error Handling
+
+Chuẩn hóa các nhóm lỗi:
+
+| Error | Meaning |
+|---|---|
+| AUTH_INVALID_CREDENTIALS | Thông tin đăng nhập không hợp lệ |
+| AUTH_EMAIL_ALREADY_EXISTS | Email đã được đăng ký |
+| AUTH_EMAIL_NOT_VERIFIED | Email chưa được xác minh |
+| AUTH_SESSION_EXPIRED | Phiên đăng nhập hết hạn |
+| AUTH_SESSION_INVALID | Phiên không hợp lệ |
+| AUTH_RATE_LIMITED | Vượt giới hạn yêu cầu |
+| AUTH_PROVIDER_UNAVAILABLE | Provider không khả dụng |
+| AUTH_UNKNOWN_ERROR | Lỗi xác thực chưa phân loại |
+
+Rules:
+- Không trả provider raw error trực tiếp cho frontend.
+- Không ghi password, token hoặc secret vào log.
+- UI phải nhận được thông báo có thể xử lý và hướng dẫn người dùng phù hợp.
+
+#### 4. Dependencies
+
+| Dependency | Purpose |
+|---|---|
+| D02 Authentication Integration | Kết nối Authentication Provider |
+| D03 Shared Types & Contracts | Shared User Context và authentication contracts |
+| D04 Validation | Input validation |
+| D06 Error Handling | Chuẩn hóa lỗi |
+| D08 Security & Configuration | Bảo vệ session, token và secrets |
+| B02 Workspace & Project Management | Khởi tạo Personal Workspace |
+
+#### 5. External Interface
+
+B01 cung cấp các application-level operations:
+
+- `register(email, password)`
+- `login(email, password)`
+- `logout()`
+- `getCurrentSession()`
+- `getCurrentUser()`
+- `resolveUserContext()`
+
+Đây là tên thao tác logic ở cấp kiến trúc, chưa phải API signature cuối cùng.
+
+Exact request/response types, session storage strategy và provider adapter contract sẽ được xác định trong L3/L4 design.
+
+#### 6. Security Requirements
+
+- Authentication phải được xác minh tại trusted boundary.
+- Không lưu plaintext password.
+- Không đưa privileged provider secrets vào frontend.
+- Không tin Internal User ID do client tự gửi.
+- Các thao tác dữ liệu phải được authorization kiểm tra riêng.
+- Authentication thành công không đồng nghĩa với quyền truy cập mọi dữ liệu.
+- Không log password, access token hoặc refresh token.
+
+#### 7. Acceptance Criteria
+
+B01 được xem là đạt yêu cầu khi:
+
+1. Người dùng đăng ký được bằng Email / Password.
+2. Người dùng đăng nhập được bằng thông tin hợp lệ.
+3. Người dùng không thể đăng nhập bằng thông tin không hợp lệ.
+4. Người dùng có thể đăng xuất.
+5. Session được khôi phục phù hợp sau page refresh.
+6. Session hết hạn được phát hiện và xử lý.
+7. Hệ thống resolve được Internal User ID.
+8. Các module nghiệp vụ nhận được User Context thống nhất.
+9. Không có module nghiệp vụ phụ thuộc trực tiếp vào provider SDK.
+10. Authentication errors được chuẩn hóa.
+11. Không có password hoặc privileged secret bị lộ ở frontend/log.
+12. User A không thể sử dụng User Context của User B để truy cập dữ liệu.
+
+#### 8. Testing Requirements
+
+**Unit Tests**
+- Input validation.
+- Authentication state transitions.
+- Internal identity mapping.
+- Error normalization.
+
+**Integration Tests**
+- Registration with provider.
+- Login with provider.
+- Logout with provider.
+- Session restoration.
+- Session expiration.
+- User Context resolution.
+
+**Security Tests**
+- Invalid or expired token.
+- Missing authentication.
+- Forged client-provided User ID.
+- Cross-user data access attempt.
+
+**End-to-End Tests**
+- Register → Workspace initialization → Logout.
+- Login → Access personal workspace → Refresh → Continue session.
+- Login → Session expiration → Re-authentication.
+
+#### 9. Provider Strategy
+
+Authentication method:
+- Email / Password — APPROVED (DEC-006).
+
+Authentication Provider:
+- OPEN (DEC-020).
+
+Proposed evaluation candidate:
+- Supabase Auth.
+
+Provider-specific implementation must remain inside D02. Selecting Supabase Auth is not implied by approval of Email / Password.
+
+Password hash portability between providers is not guaranteed. Provider migration may require password reset or re-authentication.
+
+#### 10. Out of Scope / Future Scope
+
+- Google/GitHub social login.
+- Multi-factor authentication.
+- Multiple identity providers per user.
+- Team membership and role management.
+- Enterprise SSO.
+- Advanced account recovery workflows.
+
+#### 11. Architecture Status
+
+| Item | Status |
+|---|---|
+| Email / Password method | APPROVED |
+| Authentication Provider | OPEN |
+| B01 module responsibility | PROPOSED |
+| Internal User Context | PROPOSED |
+| Session strategy | PROPOSED |
+| Provider adapter contract | PROPOSED |
+| Detailed implementation | NOT_STARTED |
+
+**Implementation Rule:** B01 must not be implemented until its provider integration contract, session strategy, Internal User mapping, and authorization boundary are reviewed and approved.
 
 ### B02. Workspace & Project Management
 
