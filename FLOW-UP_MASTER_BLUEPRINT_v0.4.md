@@ -956,13 +956,293 @@ DATA & INFRASTRUCTURE
 
 ### D01. Database & Persistence
 
-Initial responsibilities:
-- Persistent user-owned application data.
-- Schema and migrations.
-- Foreign keys and constraints.
-- Indexes.
+#### 1. Purpose
+
+D01 is responsible for providing the persistent data layer for FLOW-UP.
+
+It defines how application data is structured, stored, related, validated, and maintained over time.
+
+D01 provides a consistent persistence foundation for other modules. Business modules must access persistent data through the application's defined data-access layer rather than implementing their own database logic independently.
+
+#### 2. Responsibilities
+
+D01 owns the following responsibilities:
+
+- Persistent storage for application data.
+- Database schema design and maintenance.
+- Database migrations and schema versioning.
+- Primary keys, foreign keys, and relational constraints.
+- Indexes and query performance foundations.
 - Development seed data.
+- Transaction and data consistency support.
 - Backup and recovery considerations.
+- Database-level integrity and persistence rules.
+
+#### 3. Scope
+
+**Included:**
+
+- Defining database tables and relationships.
+- Defining column types, nullability, defaults, and constraints.
+- Maintaining schema changes through migrations.
+- Ensuring relational integrity.
+- Defining indexes for expected query patterns.
+- Providing development and testing seed data.
+- Establishing database access conventions.
+- Documenting backup and recovery requirements.
+
+**Excluded:**
+
+- Authentication and identity-provider integration.
+- Business workflows and application use cases.
+- User-interface state management.
+- API endpoint implementation.
+- Business authorization decisions.
+- Background job orchestration.
+- Analytics and reporting logic.
+
+These responsibilities belong to their respective modules.
+
+#### 4. Data Ownership and Boundaries
+
+D01 owns the database structure and persistence mechanisms.
+
+Individual business modules own the meaning and business rules of their data.
+
+Examples:
+
+- B01 owns authentication and user-context behavior.
+- B02 owns workspace and project-management behavior.
+- D01 defines how the corresponding records are stored and related.
+
+Database ownership does not mean D01 owns every business rule.
+
+Other modules must not bypass defined data-access boundaries to execute arbitrary database operations.
+
+#### 5. Database Structure
+
+The database schema must follow these general principles:
+
+**5.1 Primary Keys**
+
+- Every persistent entity must have a primary key.
+- Primary keys must uniquely identify records.
+- Primary-key generation must follow one consistent project-wide convention.
+- Other modules must not assume that an internal identifier is identical to an external provider identifier.
+
+**5.2 Relationships**
+
+- Relationships between entities must be explicitly defined.
+- Foreign keys must be used where relational integrity is required.
+- Relationship cardinality must be documented.
+- Deletion behavior must be explicitly defined where dependent records exist.
+
+**5.3 Constraints**
+
+Use database constraints to protect data integrity where appropriate:
+
+- NOT NULL for required values.
+- UNIQUE for values that must not be duplicated.
+- FOREIGN KEY for relational integrity.
+- CHECK for suitable database-level validation.
+- DEFAULT for appropriate default values.
+
+Application-level validation and database constraints serve different purposes. Neither should be treated as a complete replacement for the other.
+
+**5.4 Naming Conventions**
+
+- Table names must follow one consistent naming convention.
+- Column names must be descriptive and consistent.
+- Primary-key and foreign-key naming must be predictable.
+- Migration files must follow a consistent naming and ordering convention.
+
+The final naming convention must be documented before implementation begins.
+
+#### 6. Schema and Migrations
+
+All structural database changes must be managed through migrations.
+
+Requirements:
+
+- Each migration must represent a specific schema change.
+- Migrations must be versioned and executed in a predictable order.
+- Existing migration files must not be silently modified after they have been applied to shared environments.
+- Schema changes must be reviewed for compatibility with existing application code.
+- Migration failures must not leave the database in an undocumented or inconsistent state.
+- The application must be able to determine which migrations have already been applied.
+
+Development, testing, and production environments must use the same migration history.
+
+Manual database changes must not become the normal method of maintaining the schema.
+
+#### 7. Data Access and Persistence Rules
+
+Other modules must use the established database access layer.
+
+Requirements:
+
+- Database connection and configuration must be centralized.
+- Database access logic must not be duplicated across unrelated modules.
+- Queries must use parameterized operations or the equivalent safe mechanism provided by the selected database library.
+- Transactions must be used when multiple related operations must succeed or fail together.
+- Database errors must be handled at the appropriate application boundary.
+- Sensitive information must not be exposed through database error messages or logs.
+- Persistent data must not depend on temporary application memory.
+
+The exact repository, service, ORM, or query-builder structure will be defined during implementation.
+
+#### 8. Indexing and Performance
+
+Indexes must support actual application query patterns.
+
+Requirements:
+
+- Primary keys must have appropriate indexing.
+- Foreign-key columns should be evaluated for indexing.
+- Frequently queried columns should be evaluated for indexing.
+- Composite indexes may be introduced when queries commonly filter or sort by multiple columns.
+- Unnecessary indexes should be avoided because they increase storage and write costs.
+- Index changes must be managed through migrations.
+
+Performance optimization must be based on observed or expected query patterns, not arbitrary index creation.
+
+#### 9. Development Seed Data
+
+D01 must provide a predictable way to initialize development and testing data.
+
+Requirements:
+
+- Seed data must support local development and automated testing.
+- Seed operations should be repeatable without creating uncontrolled duplicate records.
+- Development seed data must be clearly separated from production data.
+- Real user credentials and sensitive production data must not be included.
+- The application must not depend on development seed data to operate in production.
+
+Seed data should cover the main entities and relationships required to test the application.
+
+#### 10. Data Integrity and Consistency
+
+The persistence layer must protect data consistency.
+
+Requirements:
+
+- Invalid relationships must be rejected by the database where applicable.
+- Operations involving multiple dependent records must use transactions when necessary.
+- Unique business identifiers must have appropriate uniqueness protection.
+- Deletion and update behavior must be explicitly considered for related records.
+- Application logic must not assume that a database operation succeeded before receiving confirmation.
+
+The database is the final persistence authority for stored records.
+
+#### 11. Backup and Recovery
+
+D01 must define the application's backup and recovery considerations.
+
+The design must consider:
+
+- What data needs to be backed up.
+- Backup frequency.
+- Backup retention.
+- Backup storage location.
+- Recovery procedure.
+- Data-loss tolerance.
+- Recovery-time expectations.
+
+Actual backup scheduling and infrastructure configuration may depend on the selected database provider and deployment environment.
+
+Backup availability must not be assumed merely because the database provider offers backup features. The recovery process must be documented and testable.
+
+#### 12. Security Requirements
+
+- Database credentials must not be committed to source control.
+- Connection secrets must be provided through environment configuration or an approved secret-management mechanism.
+- Production database access must be restricted.
+- Database operations must use safe query mechanisms.
+- Sensitive data must not be logged unnecessarily.
+- Development and production database environments must remain separated.
+- Access to persistent data must follow the application's authorization boundaries.
+
+#### 13. Dependencies and Interfaces
+
+D01 provides persistence capabilities to the application modules.
+
+Dependencies include:
+
+- B01: User identity and user-related persistence.
+- B02: Workspace and project-related persistence.
+- Other business modules: Their corresponding persistent entities.
+
+D01 must not depend on business modules to define its fundamental database infrastructure.
+
+The database schema must support the approved domain model and must not independently introduce unapproved business features.
+
+#### 14. Acceptance Criteria
+
+D01 is considered ready when:
+
+- [ ] The database technology and connection strategy are documented and approved.
+- [ ] The initial database schema is defined.
+- [ ] Primary keys and relationships are documented.
+- [ ] Required constraints are defined.
+- [ ] Migration execution works from an empty database.
+- [ ] Existing migrations can be applied in the correct order.
+- [ ] Development seed data can be initialized repeatably.
+- [ ] Database access follows a consistent application-level convention.
+- [ ] Related operations can use transactions where required.
+- [ ] Database errors are handled without exposing sensitive information.
+- [ ] Backup and recovery considerations are documented.
+- [ ] Other modules can use the persistence layer without implementing separate database infrastructure.
+
+#### 15. Testing Requirements
+
+D01 must support the following tests:
+
+**Schema Tests**
+- Verify required tables and columns exist.
+- Verify primary keys and foreign keys.
+- Verify required constraints.
+- Verify unique constraints.
+
+**Migration Tests**
+- Apply all migrations to an empty database.
+- Verify migrations execute in the correct order.
+- Verify the resulting schema matches the expected structure.
+
+**Persistence Tests**
+- Create and retrieve records.
+- Update existing records.
+- Delete records according to defined deletion rules.
+- Verify relational integrity.
+- Verify transaction rollback when an operation fails.
+
+**Seed Tests**
+- Initialize development seed data.
+- Run seed initialization repeatedly.
+- Verify that duplicate or inconsistent data is not introduced.
+
+#### 16. Decisions and Open Questions
+
+The following decisions must be resolved before the corresponding implementation work is finalized:
+
+- Database technology and provider.
+- Database access approach: ORM, query builder, or direct SQL.
+- Primary-key format.
+- Table and column naming conventions.
+- Timestamp conventions and timezone handling.
+- Soft delete versus hard delete policy.
+- Migration tooling.
+- Backup and recovery strategy.
+- Production database deployment configuration.
+
+No technology or implementation choice in this section is considered approved unless it is explicitly recorded in the Decision Log.
+
+#### 17. Architecture Status
+
+D01 defines the responsibilities and boundaries of the persistence layer.
+
+The detailed database schema, technology selection, migration tooling, and deployment configuration remain subject to the project's approved architecture decisions.
+
+D01 must provide a stable persistence foundation without taking ownership of business logic belonging to other modules.
 
 ### D02. Authentication Integration
 
