@@ -72,7 +72,7 @@ describe('FLOW-UP application', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Personal Workspace')).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith(
-      'http://localhost:3001/api/auth/session',
+      '/api/auth/session',
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer session-token',

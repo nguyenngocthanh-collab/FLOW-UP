@@ -1,3 +1,4 @@
+
 import type { AuthProvider } from "../../modules/auth/auth.provider.ts";
 import { createSupabaseAuthProvider } from "../../modules/auth/supabase.provider.ts";
 import { createLocalDevAuthProvider } from "./local-dev.provider.ts";
@@ -11,15 +12,35 @@ export interface AuthConfig {
   devMode?: boolean;
 }
 
-export function createAuthProvider(config: AuthConfig): AuthProvider {
-  if (config.supabaseUrl && config.supabaseAnonKey) {
-    try {
-      return createSupabaseAuthProvider(config.supabaseUrl, config.supabaseAnonKey);
-    } catch {
-      // Fallback to local dev provider if Supabase client init fails
-      return createLocalDevAuthProvider();
-    }
+export function createAuthProvider(
+  config: AuthConfig
+): AuthProvider {
+  const hasSupabaseConfig =
+    Boolean(config.supabaseUrl?.trim()) &&
+    Boolean(config.supabaseAnonKey?.trim());
+
+  // Explicit local development mode without Supabase configuration.
+  if (config.devMode === true && !hasSupabaseConfig) {
+    return createLocalDevAuthProvider();
   }
 
-  return createLocalDevAuthProvider();
+  // Supabase is required when local development mode is disabled.
+  if (!hasSupabaseConfig) {
+    throw new Error(
+      "Supabase Auth configuration is required. " +
+      "Set SUPABASE_URL and SUPABASE_ANON_KEY, " +
+      "or explicitly enable AUTH_DEV_MODE=true for local development."
+    );
+  }
+
+  try {
+    return createSupabaseAuthProvider(
+      config.supabaseUrl!,
+      config.supabaseAnonKey!
+    );
+  } catch {
+    throw new Error(
+      "Failed to initialize Supabase Auth provider."
+    );
+  }
 }

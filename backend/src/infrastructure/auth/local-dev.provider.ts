@@ -116,7 +116,7 @@ export class LocalDevAuthProvider implements AuthProvider {
 
     const session: ProviderSession = {
       user: providerUser,
-      accessToken: `dev:${id}:${normalizedEmail}`
+      accessToken: `dev-token:${id}:${normalizedEmail}`
     };
 
     this.currentSession = session;
@@ -162,7 +162,7 @@ export class LocalDevAuthProvider implements AuthProvider {
 
     const session: ProviderSession = {
       user: providerUser,
-      accessToken: `dev:${found.id}:${found.email}`
+      accessToken: `dev-token:${found.id}:${found.email}`
     };
 
     this.currentSession = session;

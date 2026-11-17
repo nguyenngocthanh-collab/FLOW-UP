@@ -1,4 +1,6 @@
+
 import type { DatabaseConnection } from "../infrastructure/database/sqlite.ts";
+
 import {
   SqliteWorkspaceRepository,
   SqliteGoalRepository,
@@ -6,37 +8,49 @@ import {
   SqliteActionRepository,
   SqlitePlanningRepository
 } from "../infrastructure/repositories/index.ts";
+
 import {
   createAuthProvider,
   createTokenVerifier,
   type AuthConfig,
   type TokenVerifier
 } from "../infrastructure/auth/index.ts";
+
 import {
   createAuthenticationService,
   type AuthenticationService
 } from "../modules/auth/index.ts";
+
+import {
+  createAuthenticationApiService,
+  type AuthenticationApiService
+} from "../modules/auth/auth.service.ts";
+
 import {
   createWorkspaceService,
   type WorkspaceService,
   type GoalSummaryReader
 } from "../modules/workspace/index.ts";
+
 import {
   createGoalService,
   type GoalService,
   type GoalWorkspaceAccess
 } from "../modules/goal/index.ts";
+
 import {
   createMilestoneService,
   type MilestoneService,
   type MilestoneGoalAccess
 } from "../modules/milestone/index.ts";
+
 import {
   createActionService,
   type ActionService,
   type ActionGoalAccess,
   type ActionMilestoneAccess
 } from "../modules/action/index.ts";
+
 import {
   PlanningService,
   PlanningError,
@@ -45,6 +59,7 @@ import {
   type PlanningProposalApproval,
   type PlanningRules
 } from "../modules/planning/index.ts";
+
 import {
   ProgressService,
   ProgressError,
@@ -55,6 +70,7 @@ import {
 export interface ApplicationContainer {
   connection: DatabaseConnection;
   authService: AuthenticationService;
+  authApiService: AuthenticationApiService;
   tokenVerifier: TokenVerifier;
   workspaceService: WorkspaceService;
   goalService: GoalService;
@@ -89,11 +105,14 @@ export function createApplicationContainer(
   // 2. Auth & Token Verifier
   const authConfig: AuthConfig = config.auth ?? {};
   const authProvider = createAuthProvider(authConfig);
+
   const authService = createAuthenticationService(authProvider);
+  const authApiService = createAuthenticationApiService(authProvider);
+
   const tokenVerifier = createTokenVerifier({
     supabaseUrl: authConfig.supabaseUrl,
     supabaseKey: authConfig.supabaseAnonKey,
-    devMode: authConfig.devMode ?? true
+    devMode: authConfig.devMode ?? false
   });
 
   // 3. B02 Workspace Service
@@ -101,12 +120,16 @@ export function createApplicationContainer(
     async getIndependentGoalCount(workspaceId: string): Promise<number> {
       return goalRepo.countIndependentGoals(workspaceId);
     },
+
     async getProjectGoalCount(projectId: string): Promise<number> {
       return goalRepo.countProjectGoals(projectId);
     }
   };
 
-  const workspaceService = createWorkspaceService(workspaceRepo, goalSummaryReader);
+  const workspaceService = createWorkspaceService(
+    workspaceRepo,
+    goalSummaryReader
+  );
 
   // 4. B03 Goal Service
   const goalWorkspaceAccess: GoalWorkspaceAccess = {
@@ -114,27 +137,40 @@ export function createApplicationContainer(
       const ws = await workspaceRepo.findWorkspaceByUserId(userId);
       return ws?.id ?? null;
     },
+
     async validateProjectInWorkspace(
       userId: string,
       workspaceId: string,
       projectId: string
     ): Promise<boolean> {
       const project = await workspaceRepo.findProjectById(projectId);
-      if (!project || project.workspaceId !== workspaceId) return false;
+
+      if (!project || project.workspaceId !== workspaceId) {
+        return false;
+      }
+
       const ws = await workspaceRepo.findWorkspaceById(workspaceId);
       return ws?.userId === userId;
     }
   };
 
-  const goalService = createGoalService(goalRepo, goalWorkspaceAccess);
+  const goalService = createGoalService(
+    goalRepo,
+    goalWorkspaceAccess
+  );
 
   // 5. B04 Milestone Service
   const milestoneGoalAccess: MilestoneGoalAccess = {
     async getGoalForUser(user, goalId) {
       const res = await goalService.getGoal(user, goalId);
+
       if (!res.success) {
-        return { success: false, error: res.error };
+        return {
+          success: false,
+          error: res.error
+        };
       }
+
       return {
         success: true,
         data: {
@@ -146,25 +182,46 @@ export function createApplicationContainer(
     }
   };
 
-  const milestoneService = createMilestoneService(milestoneRepo, milestoneGoalAccess);
+  const milestoneService = createMilestoneService(
+    milestoneRepo,
+    milestoneGoalAccess
+  );
 
   // 6. B05 Action Service
   const actionGoalAccess: ActionGoalAccess = {
     async validateGoal(user, goalId) {
       const res = await goalService.getGoal(user, goalId);
+
       if (!res.success) {
-        return { success: false, error: res.error };
+        return {
+          success: false,
+          error: res.error
+        };
       }
-      return { success: true, data: { id: res.data.id } };
+
+      return {
+        success: true,
+        data: {
+          id: res.data.id
+        }
+      };
     }
   };
 
   const actionMilestoneAccess: ActionMilestoneAccess = {
     async validateMilestone(user, milestoneId, goalId) {
-      const res = await milestoneService.getMilestone(user, milestoneId);
+      const res = await milestoneService.getMilestone(
+        user,
+        milestoneId
+      );
+
       if (!res.success) {
-        return { success: false, error: res.error };
+        return {
+          success: false,
+          error: res.error
+        };
       }
+
       if (res.data.goalId !== goalId) {
         return {
           success: false,
@@ -174,9 +231,13 @@ export function createApplicationContainer(
           }
         };
       }
+
       return {
         success: true,
-        data: { id: res.data.id, goalId: res.data.goalId }
+        data: {
+          id: res.data.id,
+          goalId: res.data.goalId
+        }
       };
     }
   };
@@ -191,6 +252,7 @@ export function createApplicationContainer(
   const actionAccess: ActionAccess = {
     async assertCanAccessAction(user, actionId) {
       const res = await actionService.getAction(user, actionId);
+
       if (!res.success) {
         throw new PlanningError(
           "SCHEDULE_ACCESS_DENIED",
@@ -209,10 +271,18 @@ export function createApplicationContainer(
         );
       }
     },
+
     async assertCanAccessSchedule(user, schedule) {
-      await actionAccess.assertCanAccessAction(user, schedule.actionId);
+      await actionAccess.assertCanAccessAction(
+        user,
+        schedule.actionId
+      );
+
       if (schedule.dailyPlanId) {
-        const plan = await planningRepo.getDailyPlan(schedule.dailyPlanId);
+        const plan = await planningRepo.getDailyPlan(
+          schedule.dailyPlanId
+        );
+
         if (plan && plan.userId !== user.userId) {
           throw new PlanningError(
             "SCHEDULE_ACCESS_DENIED",
@@ -227,13 +297,19 @@ export function createApplicationContainer(
     async assertScheduleAllowed({ startAt, endAt }) {
       const start = Date.parse(startAt);
       const end = Date.parse(endAt);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+
+      if (
+        !Number.isFinite(start) ||
+        !Number.isFinite(end) ||
+        end <= start
+      ) {
         throw new PlanningError(
           "SCHEDULE_INVALID_TIME_RANGE",
           "Schedule end time must be after start time."
         );
       }
     },
+
     assertScheduleMatchesPlanDate({ startAt, dailyPlan }) {
       if (!startAt.startsWith(dailyPlan.date)) {
         throw new PlanningError(
@@ -267,6 +343,7 @@ export function createApplicationContainer(
   const progressSources: ProgressSourceAccess = {
     async assertCanAccessGoal(user, goalId) {
       const res = await goalService.getGoal(user, goalId);
+
       if (!res.success) {
         throw new ProgressError(
           "PROGRESS_ACCESS_DENIED",
@@ -274,29 +351,52 @@ export function createApplicationContainer(
         );
       }
     },
+
     async getMeasurementProgressInputs() {
       // B06 is intentionally not integrated
       return [];
     },
+
     async getActionProgressInput(_user, goalId) {
       const actions = await actionRepo.listByGoal(goalId);
-      return { goalId, actions };
+      return {
+        goalId,
+        actions
+      };
     },
+
     async getChildGoalIds(user, goalId) {
-      const wsId = await goalWorkspaceAccess.getCurrentWorkspaceId(user.userId);
+      const wsId = await goalWorkspaceAccess.getCurrentWorkspaceId(
+        user.userId
+      );
+
       if (!wsId) return [];
-      const children = await goalRepo.listGoalsByWorkspaceId(wsId, {
-        parentGoalId: goalId
-      });
+
+      const children = await goalRepo.listGoalsByWorkspaceId(
+        wsId,
+        {
+          parentGoalId: goalId
+        }
+      );
+
       return children.map((c) => c.id);
     },
+
     async getGoalProgressInputs(user, goalId) {
-      const childGoalIds = await this.getChildGoalIds(user, goalId);
+      const childGoalIds = await this.getChildGoalIds(
+        user,
+        goalId
+      );
+
       const actions = await actionRepo.listByGoal(goalId);
-      const completedCount = actions.filter((a) => a.status === "COMPLETED").length;
+
+      const completedCount = actions.filter(
+        (a) => a.status === "COMPLETED"
+      ).length;
 
       return {
         measurementResults: [],
+
         actionResult: {
           goalId,
           totalActions: actions.length,
@@ -304,8 +404,11 @@ export function createApplicationContainer(
           incompleteActions: actions.length - completedCount,
           completionValue: null,
           calculationStatus: "RULE_NOT_CONFIGURED" as const,
-          calculationContext: { note: "B08 rules open / not configured" }
+          calculationContext: {
+            note: "B08 rules open / not configured"
+          }
         },
+
         childGoalResults: childGoalIds.map((id) => ({
           goalId: id,
           progressValue: null,
@@ -328,9 +431,17 @@ export function createApplicationContainer(
         calculationContext: {}
       };
     },
+
     calculateActionCompletion(input: unknown) {
-      const typed = (input ?? {}) as { goalId?: string; actions?: unknown[] };
-      const total = Array.isArray(typed.actions) ? typed.actions.length : 0;
+      const typed = (input ?? {}) as {
+        goalId?: string;
+        actions?: unknown[];
+      };
+
+      const total = Array.isArray(typed.actions)
+        ? typed.actions.length
+        : 0;
+
       return {
         goalId: typed.goalId ?? "",
         totalActions: total,
@@ -341,8 +452,12 @@ export function createApplicationContainer(
         calculationContext: {}
       };
     },
+
     calculateGoal(input: unknown) {
-      const typed = (input ?? {}) as { goalId?: string };
+      const typed = (input ?? {}) as {
+        goalId?: string;
+      };
+
       return {
         goalId: typed.goalId ?? "",
         progressValue: null,
@@ -351,6 +466,7 @@ export function createApplicationContainer(
         calculationContext: {}
       };
     },
+
     aggregateChildGoals() {
       return {
         goalId: "",
@@ -360,6 +476,7 @@ export function createApplicationContainer(
         calculationContext: {}
       };
     },
+
     compareMeasurement() {
       return {
         difference: null,
@@ -367,16 +484,21 @@ export function createApplicationContainer(
         progressValue: null
       };
     },
+
     combineStatuses() {
       return "RULE_NOT_CONFIGURED";
     }
   };
 
-  const progressService = new ProgressService(progressSources, progressRules);
+  const progressService = new ProgressService(
+    progressSources,
+    progressRules
+  );
 
   return {
     connection,
     authService,
+    authApiService,
     tokenVerifier,
     workspaceService,
     goalService,

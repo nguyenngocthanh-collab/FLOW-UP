@@ -39,8 +39,10 @@ function mapSession(
 }
 
 /**
- * Browser-side Supabase Auth adapter.
- * Use only the public/publishable key, never a service-role key.
+ * Server-side Supabase Auth adapter.
+ *
+ * Each authentication operation gets its own client.
+ * No shared persisted session is kept between API requests.
  */
 export function createSupabaseAuthProvider(
   supabaseUrl: string,
@@ -50,20 +52,20 @@ export function createSupabaseAuthProvider(
     throw new Error("Missing Supabase public configuration.");
   }
 
-  const client: SupabaseClient = createClient(
-    supabaseUrl,
-    publishableKey,
-    {
+  function createAuthClient(): SupabaseClient {
+    return createClient(supabaseUrl, publishableKey, {
       auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false
       }
-    }
-  );
+    });
+  }
 
   return {
     async register(email, password) {
+      const client = createAuthClient();
+
       const { data, error } = await client.auth.signUp({
         email,
         password
@@ -79,6 +81,8 @@ export function createSupabaseAuthProvider(
     },
 
     async signIn(email, password) {
+      const client = createAuthClient();
+
       const { data, error } =
         await client.auth.signInWithPassword({
           email,
@@ -95,36 +99,32 @@ export function createSupabaseAuthProvider(
     },
 
     async signOut() {
-      const { error } = await client.auth.signOut();
-
+      // The backend does not keep a shared Supabase session.
+      // The client must discard its locally stored access token.
       return {
         data: null,
-        error
+        error: null
       };
     },
 
     async getSession() {
-      const { data, error } = await client.auth.getSession();
-
+      // Authentication state is verified per request by TokenVerifier.
       return {
         data: {
-          session: mapSession(data.session)
+          session: null
         },
-        error
+        error: null
       };
     },
 
-    onAuthStateChange(callback) {
-      const { data } = client.auth.onAuthStateChange(
-        (event, session) => {
-          callback(
-            event as ProviderAuthEvent,
-            mapSession(session)
-          );
-        }
-      );
-
-      return () => data.subscription.unsubscribe();
+    onAuthStateChange(
+      _callback: (
+        event: ProviderAuthEvent,
+        session: ProviderSession | null
+      ) => void
+    ) {
+      // There is no persistent server-side session to subscribe to.
+      return () => {};
     }
   };
 }

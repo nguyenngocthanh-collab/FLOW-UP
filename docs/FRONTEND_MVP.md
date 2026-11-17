@@ -19,9 +19,9 @@ In a second terminal, start the web app:
 pnpm dev
 ```
 
-Open the Vite URL, normally `http://localhost:5173`. The frontend reads `VITE_API_BASE_URL`; it defaults to `http://localhost:3001` and accepts the repository example value `http://localhost:3001/api` as well. It uses the existing API routes and does not fall back to sample data.
+Open the Vite URL, normally `http://localhost:5173`. The frontend calls relative `/api/...` paths. Vite's development server proxies `/api` to `http://localhost:3001`, so local browsing and Cloudflare Tunnel access use the same API configuration. No `/health` proxy is needed by the frontend. Production builds do not include the Vite proxy; set `VITE_API_BASE_URL` to an absolute production API origin only when the API is hosted separately. An empty value uses same-origin `/api` in production as well.
 
-For persistent local data, use a file path for `DATABASE_PATH` instead of `:memory:`. For Supabase authentication, configure the real `SUPABASE_URL` and `SUPABASE_ANON_KEY`, leave `AUTH_DEV_MODE` disabled, and set `CORS_ORIGIN` to the frontend origin.
+For persistent local data, use a file path for `DATABASE_PATH` instead of `:memory:`. For Supabase authentication, configure the real `SUPABASE_URL` and `SUPABASE_ANON_KEY`, leave `AUTH_DEV_MODE` disabled, and keep `CORS_ORIGIN` restricted to the local frontend origin. Browser API calls through the Vite proxy are same-origin, so no wildcard CORS setting is needed for Tunnel access.
 
 ## Session handling
 

@@ -25,21 +25,20 @@ export class SupabaseOrDevTokenVerifier implements TokenVerifier {
 
     if (!cleanToken) return null;
 
-    // Development tokens are accepted only when devMode is explicitly enabled.
-    if (this.options.devMode === true) {
+    const isDevToken =
+      cleanToken.startsWith("dev:") ||
+      cleanToken.startsWith("dev-token:") ||
+      cleanToken.startsWith("mock-token:");
+
+    // Development tokens are accepted only when explicitly enabled.
+    if (isDevToken) {
+      if (this.options.devMode !== true) return null;
+
       return this.parseDevToken(cleanToken);
     }
 
-    // Never accept development or mock tokens outside development mode.
-    if (
-      cleanToken.startsWith("dev:") ||
-      cleanToken.startsWith("dev-token:") ||
-      cleanToken.startsWith("mock-token:")
-    ) {
-      return null;
-    }
-
-    // Verify the access token with Supabase.
+    // Supabase access tokens must always be verified with Supabase,
+    // including when the application is running in development mode.
     if (!this.options.supabaseUrl || !this.options.supabaseKey) {
       return null;
     }
