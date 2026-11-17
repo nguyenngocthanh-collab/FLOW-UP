@@ -40,8 +40,14 @@ export function sendError(
 }
 
 export function getStatusCodeForError(code: string): number {
+  if (code.includes("RATE_LIMITED")) return 429;
+  if (
+    code.includes("INVALID_CREDENTIALS") ||
+    code.includes("EMAIL_NOT_CONFIRMED") ||
+    code.includes("UNAUTHENTICATED")
+  ) return 401;
+  if (code.includes("PROVIDER_ERROR") || code.includes("NETWORK_ERROR")) return 502;
   if (code.includes("NOT_FOUND")) return 404;
-  if (code.includes("UNAUTHENTICATED")) return 401;
   if (code.includes("ACCESS_DENIED") || code.includes("OWNERSHIP")) return 403;
   if (code.includes("ALREADY_EXISTS") || code.includes("CIRCULAR") || code.includes("CONFLICT")) return 409;
   if (code.includes("INVALID") || code.includes("INPUT") || code.includes("REQUIRED")) return 400;

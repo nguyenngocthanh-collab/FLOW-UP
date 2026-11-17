@@ -1,3 +1,4 @@
+
 import type { Router } from "../router.ts";
 import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
 
@@ -5,8 +6,17 @@ export function registerAuthRoutes(router: Router): void {
   router.post(
     "/api/auth/register",
     async (ctx) => {
-      const body = (ctx.body ?? {}) as { email?: string; password?: string };
-      if (!body.email || !body.password) {
+      const body = (ctx.body ?? {}) as {
+        email?: string;
+        password?: string;
+      };
+
+      if (
+        typeof body.email !== "string" ||
+        typeof body.password !== "string" ||
+        !body.email.trim() ||
+        !body.password.trim()
+      ) {
         sendError(
           ctx.res,
           400,
@@ -17,27 +27,29 @@ export function registerAuthRoutes(router: Router): void {
         return;
       }
 
-      const result = await ctx.container.authService.register({
+      const result = await ctx.container.authApiService.register({
         email: body.email,
         password: body.password
       });
 
       if (!result.success) {
         const status = getStatusCodeForError(result.error.code);
-        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
-        return;
-      }
 
-      let token: string | undefined;
-      if (result.data.status === "authenticated") {
-        token = `dev-token:${result.data.user.userId}:${result.data.user.email ?? ""}`;
+        sendError(
+          ctx.res,
+          status,
+          result.error.code,
+          result.error.message,
+          ctx.corsOrigin
+        );
+        return;
       }
 
       sendSuccess(
         ctx.res,
         {
-          ...result.data,
-          token
+          ...result.data.registration,
+          token: result.data.accessToken
         },
         201,
         ctx.corsOrigin
@@ -49,8 +61,17 @@ export function registerAuthRoutes(router: Router): void {
   router.post(
     "/api/auth/login",
     async (ctx) => {
-      const body = (ctx.body ?? {}) as { email?: string; password?: string };
-      if (!body.email || !body.password) {
+      const body = (ctx.body ?? {}) as {
+        email?: string;
+        password?: string;
+      };
+
+      if (
+        typeof body.email !== "string" ||
+        typeof body.password !== "string" ||
+        !body.email.trim() ||
+        !body.password.trim()
+      ) {
         sendError(
           ctx.res,
           400,
@@ -61,24 +82,40 @@ export function registerAuthRoutes(router: Router): void {
         return;
       }
 
-      const result = await ctx.container.authService.signIn({
+      const result = await ctx.container.authApiService.signIn({
         email: body.email,
         password: body.password
       });
 
       if (!result.success) {
         const status = getStatusCodeForError(result.error.code);
-        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+
+        sendError(
+          ctx.res,
+          status,
+          result.error.code,
+          result.error.message,
+          ctx.corsOrigin
+        );
         return;
       }
 
-      const token = `dev-token:${result.data.userId}:${result.data.email ?? ""}`;
+      if (!result.data.accessToken) {
+        sendError(
+          ctx.res,
+          500,
+          "AUTH_PROVIDER_ERROR",
+          "Authentication provider did not return an access token.",
+          ctx.corsOrigin
+        );
+        return;
+      }
 
       sendSuccess(
         ctx.res,
         {
-          user: result.data,
-          token
+          user: result.data.user,
+          token: result.data.accessToken
         },
         200,
         ctx.corsOrigin
@@ -90,7 +127,21 @@ export function registerAuthRoutes(router: Router): void {
   router.post(
     "/api/auth/logout",
     async (ctx) => {
-      await ctx.container.authService.signOut();
+      const result = await ctx.container.authService.signOut();
+
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+
+        sendError(
+          ctx.res,
+          status,
+          result.error.code,
+          result.error.message,
+          ctx.corsOrigin
+        );
+        return;
+      }
+
       sendSuccess(
         ctx.res,
         {
