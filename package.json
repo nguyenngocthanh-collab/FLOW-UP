@@ -16,9 +16,16 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "backend:dev": "vite-node backend/src/server/index.ts",
+    "backend:start": "vite-node backend/src/server/index.ts",
+    "backend:typecheck": "tsc -p tsconfig.backend.json --noEmit",
+    "backend:test": "vitest run --config backend/vitest.config.ts",
+    "backend:db:init": "vite-node backend/src/server/init-db.ts",
+    "test:all": "vitest run && vitest run --config backend/vitest.config.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.119.0",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },

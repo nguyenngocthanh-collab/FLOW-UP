@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false,
+    "skipLibCheck": true,
+    "strict": false,
+    "strictNullChecks": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "backend/src/infrastructure",
+    "backend/src/application",
+    "backend/src/api",
+    "backend/src/server",
+    "backend/tests/integration"
+  ]
+}
