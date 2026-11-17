@@ -1,3 +1,4 @@
+
 export interface ProviderUser {
   id: string;
   email: string | null;
@@ -5,6 +6,9 @@ export interface ProviderUser {
 
 export interface ProviderSession {
   user: ProviderUser;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
 }
 
 export type ProviderAuthEvent =
@@ -22,19 +26,38 @@ export interface ProviderResult<T> {
 }
 
 export interface AuthProvider {
-  register(email: string, password: string): Promise<
-    ProviderResult<{ user: ProviderUser | null; session: ProviderSession | null }>
+  register(
+    email: string,
+    password: string
+  ): Promise<
+    ProviderResult<{
+      user: ProviderUser | null;
+      session: ProviderSession | null;
+    }>
   >;
 
-  signIn(email: string, password: string): Promise<
-    ProviderResult<{ user: ProviderUser | null; session: ProviderSession | null }>
+  signIn(
+    email: string,
+    password: string
+  ): Promise<
+    ProviderResult<{
+      user: ProviderUser | null;
+      session: ProviderSession | null;
+    }>
   >;
 
   signOut(): Promise<ProviderResult<null>>;
 
-  getSession(): Promise<ProviderResult<{ session: ProviderSession | null }>>;
+  getSession(): Promise<
+    ProviderResult<{
+      session: ProviderSession | null;
+    }>
+  >;
 
   onAuthStateChange(
-    callback: (event: ProviderAuthEvent, session: ProviderSession | null) => void
+    callback: (
+      event: ProviderAuthEvent,
+      session: ProviderSession | null
+    ) => void
   ): () => void;
 }

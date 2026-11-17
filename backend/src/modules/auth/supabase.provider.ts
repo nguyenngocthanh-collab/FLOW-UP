@@ -1,3 +1,4 @@
+
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type {
   AuthProvider,
@@ -6,14 +7,35 @@ import type {
   ProviderUser
 } from "./auth.provider";
 
-function mapUser(user: { id: string; email?: string }): ProviderUser {
-  return { id: user.id, email: user.email ?? null };
+function mapUser(user: {
+  id: string;
+  email?: string;
+}): ProviderUser {
+  return {
+    id: user.id,
+    email: user.email ?? null
+  };
 }
 
 function mapSession(
-  session: { user: { id: string; email?: string } } | null
+  session: {
+    user: {
+      id: string;
+      email?: string;
+    };
+    access_token: string;
+    refresh_token: string;
+    expires_at?: number;
+  } | null
 ): ProviderSession | null {
-  return session ? { user: mapUser(session.user) } : null;
+  if (!session) return null;
+
+  return {
+    user: mapUser(session.user),
+    accessToken: session.access_token,
+    refreshToken: session.refresh_token,
+    expiresAt: session.expires_at
+  };
 }
 
 /**
@@ -28,17 +50,25 @@ export function createSupabaseAuthProvider(
     throw new Error("Missing Supabase public configuration.");
   }
 
-  const client: SupabaseClient = createClient(supabaseUrl, publishableKey, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true
+  const client: SupabaseClient = createClient(
+    supabaseUrl,
+    publishableKey,
+    {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
+      }
     }
-  });
+  );
 
   return {
     async register(email, password) {
-      const { data, error } = await client.auth.signUp({ email, password });
+      const { data, error } = await client.auth.signUp({
+        email,
+        password
+      });
+
       return {
         data: {
           user: data.user ? mapUser(data.user) : null,
@@ -49,7 +79,12 @@ export function createSupabaseAuthProvider(
     },
 
     async signIn(email, password) {
-      const { data, error } = await client.auth.signInWithPassword({ email, password });
+      const { data, error } =
+        await client.auth.signInWithPassword({
+          email,
+          password
+        });
+
       return {
         data: {
           user: data.user ? mapUser(data.user) : null,
@@ -61,21 +96,33 @@ export function createSupabaseAuthProvider(
 
     async signOut() {
       const { error } = await client.auth.signOut();
-      return { data: null, error };
+
+      return {
+        data: null,
+        error
+      };
     },
 
     async getSession() {
       const { data, error } = await client.auth.getSession();
+
       return {
-        data: { session: mapSession(data.session) },
+        data: {
+          session: mapSession(data.session)
+        },
         error
       };
     },
 
     onAuthStateChange(callback) {
-      const { data } = client.auth.onAuthStateChange((event, session) => {
-        callback(event as ProviderAuthEvent, mapSession(session));
-      });
+      const { data } = client.auth.onAuthStateChange(
+        (event, session) => {
+          callback(
+            event as ProviderAuthEvent,
+            mapSession(session)
+          );
+        }
+      );
 
       return () => data.subscription.unsubscribe();
     }
