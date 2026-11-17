@@ -1,0 +1,86 @@
+MODULE: B03 — Goal Management
+PART: Core Goal Operations + Flexible Parent/Child Hierarchy
+STATUS: CORE APPLICATION SERVICE + CONTRACTS + UNIT TEST STARTER
+PERSISTENCE: D01 ADAPTER REQUIRED
+INTEGRATION: B01 AUTH CONTEXT + B02 WORKSPACE/PROJECT ACCESS REQUIRED
+
+RESPONSIBILITIES
+- Own Goal entities and Parent–Child hierarchy.
+- Create, retrieve, list and update Goals.
+- Create Child Goals.
+- Retrieve hierarchical Goal structures.
+- Validate Workspace ownership, Project placement and Parent–Child integrity.
+- Prevent self-reference and circular references.
+
+CORE DATA MODEL
+Goal:
+- id
+- workspaceId
+- projectId (nullable)
+- parentGoalId (nullable)
+- title
+- description (nullable)
+- targetDate (nullable)
+- status
+- createdAt
+- updatedAt
+- archivedAt (nullable)
+
+CORE OPERATIONS INCLUDED IN THIS STARTER
+- createGoal
+- getGoal
+- listGoals
+- updateGoal
+- addChildGoal
+- getGoalHierarchy
+- validateParentChild
+
+BOUNDARIES
+- B01 supplies authenticated Internal User Context.
+- B02 resolves Personal Workspace and validates Project placement.
+- B03 owns Goal entity and hierarchy rules.
+- B03 does not own Milestones, Actions, Measurements, Schedules, Progress or Reviews.
+- B03 does not calculate progress.
+- B10 may propose Goal changes; only user-approved changes enter B03 operations.
+- Goal Tree is a response representation, not a separate persisted entity.
+
+HIERARCHY RULES
+- A Goal belongs to exactly one Workspace.
+- A Goal may be independent (projectId=null) or associated with one Project.
+- A Goal has at most one Parent Goal.
+- Parent and Child must share Workspace and Project scope in this starter.
+- Self-reference and cycles are rejected.
+- Hierarchy depth is not hard-coded.
+- D01 must enforce relational integrity and safe concurrent hierarchy writes.
+
+EXPLICITLY NOT IMPLEMENTED
+- Archive lifecycle: descendant and restore rules remain OPEN.
+- Delete: hard/soft delete and dependent-record rules are OPEN and BLOCKING.
+- Move Goal: product concept approved, transaction and descendant rules remain OPEN/BLOCKING.
+- Status transitions: lifecycle rules remain OPEN.
+- Related-record migration/preservation across B04-B09.
+- HTTP routes, database migrations, RLS policies, API framework, production persistence adapter.
+
+IMPORTANT IMPLEMENTATION NOTES
+- Do not treat status="ACTIVE" in test fixtures as final domain approval.
+- Persistence adapter must assign status only after the Goal lifecycle default is approved.
+- getGoalHierarchy currently expects repository results to contain the full relevant hierarchy.
+- D01 must make findDescendantIds reliable for cycle prevention.
+- Production hierarchy changes need transactions/locking to prevent concurrent cycle creation.
+- B02 adapter must use B02 contracts, not query B02 tables directly.
+- Ownership checks in this service are application checks; database-side constraints/RLS are still required.
+
+DEPENDENCIES
+- B01: authenticated Internal User Context.
+- B02: Workspace resolution and Project ownership validation.
+- B04-B06: related entity contracts before lifecycle/delete/move implementation.
+- B08-B10: progress/review/AI integrations when those modules exist.
+- D01: Goal persistence and relational integrity.
+- D03: shared contracts.
+- D04: validation.
+- D05: application communication.
+- D06: normalized errors.
+- D08: security and ownership enforcement.
+
+DO NOT MARK B03 COMPLETE until D01 persistence, B02 adapter, database security,
+hierarchy concurrency protection, lifecycle decisions and required integration/security tests exist.

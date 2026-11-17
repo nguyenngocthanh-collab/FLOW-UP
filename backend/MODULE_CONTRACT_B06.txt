@@ -1,0 +1,44 @@
+B06 — Measurement Management
+Status: Starter application service/contracts. Not production-integrated.
+
+Operations:
+- createMeasurement
+- getMeasurement
+- listMeasurementsByGoal
+- updateMeasurement
+- recordMeasurementValue
+- getCurrentMeasurementValue
+- getMeasurementHistory
+- archiveMeasurement
+
+Ownership:
+- Every operation requires AuthenticatedUserContext.
+- Measurement access is checked through its owning Goal using GoalAccess.
+- GoalAccess is an adapter contract; connect it to B03/C01 when available.
+- No direct database/provider SDK dependency is introduced.
+
+Important unresolved C06 policies are intentionally injected through MeasurementRules:
+- supported value types and value compatibility
+- Unit and Target compatibility
+- current record resolution
+- archived Measurement record policy
+- update rules when records exist (especially Unit changes)
+- archive/re-archive policy
+
+The tests use a small fake policy for service-flow testing. The fake policy is NOT a product decision.
+No default ordering is assumed for current value; no implicit unit conversion is implemented.
+Value types remain open strings at the contract boundary; primitive payloads are constrained to number/string/boolean.
+The sample test uses NUMBER only as test data, not as an approved MVP value-type decision.
+
+Not implemented:
+- Database schema/migrations or concrete persistence adapter (D01)
+- API routes/controllers (D05)
+- shared error integration (D06)
+- production B03 adapter and full C01 ownership enforcement
+- B08 progress calculation or B09 review integration
+- pagination implementation guarantees beyond passing query parameters to repository
+- restore, delete, historical record edit/delete, or advanced measurement features
+
+Logical fields and cardinality remain subject to C06/D01 approval.
+Archive preserves history by design in this service contract; actual persistence must implement soft archive.
+Do not treat this bundle as production-ready until dependencies and OPEN decisions are resolved.

@@ -1,0 +1,82 @@
+FLOW-UP BACKEND — DOMAIN MODULE INTEGRATION NOTES
+Modules: C04 (Milestone Rules), C05 (Action Rules)
+Status: CORE DOMAIN STARTER — NOT PRODUCTION COMPLETE
+
+1. DIRECTORY OWNERSHIP
+- C04 source: src/domain/C04/
+- C04 tests: tests/domain/C04/
+- C05 source: src/domain/C05/
+- C05 tests: tests/domain/C05/
+- This package does not create application services, persistence adapters, migrations, HTTP routes, or UI.
+
+2. MODULE RESPONSIBILITIES
+C04 owns Milestone identity, Goal association invariants, Milestone input validation,
+ordering invariants, and read-only Milestone facts for dependent domains.
+C05 owns Action identity, Action association invariants, Action input validation,
+and actual execution data contracts/validation.
+C04 never mutates Action. C05 never mutates Goal or Milestone.
+
+3. DEPENDENCY DIRECTION
+C04 depends conceptually on C01 ownership and C03 Goal contracts.
+C05 depends conceptually on C01 ownership, C03 Goal contracts, and C04 Milestone contracts.
+C05 may call C04's read/validation boundary; C04 must not import C05.
+Both modules are framework-, transport-, and persistence-independent.
+
+4. CONTRACTS EXPOSED
+C04:
+- GoalReader: read-only Goal existence/access/validity port.
+- MilestoneReader: read Milestone and list by Goal.
+- MilestoneActionAssociationPolicy: read-only eligibility boundary for C05.
+- MilestoneFacts / toMilestoneFacts: facts for C08/C09 consumers.
+C05:
+- ActionGoalReader and ActionMilestoneReader: read-only association validation ports.
+- ActionReader: read-only Action query port.
+- ExecutionDataReader: read-only execution facts port.
+- ActionFacts / toActionFacts: facts for C08/C09 consumers.
+These are ports/contracts, not concrete integrations.
+
+5. C04 ↔ C05 INTEGRATION
+- C04 owns Milestone; C05 owns Action and Action-Milestone association mutation.
+- C05 asks C04 to validate/read a Milestone before associating an Action.
+- C04 may expose whether a Milestone can accept an Action association, but does not write Action.milestoneId.
+- When an Action has both direct Goal and Milestone references, C05 checks that the direct Goal matches the Goal derived from the Milestone.
+- The implementation does not assume one-to-many/many-to-many cardinality.
+- The implementation does not implement association mutation workflows until cardinality is approved.
+
+6. OPEN DECISIONS PRESERVED
+C04: official status enum/transitions, completion eligibility, reopen, archive/restore/delete,
+cascade behavior, Action-Milestone cardinality, position uniqueness strategy, progress weighting,
+Review snapshot/retention.
+C05: required direct Goal association, Milestone-only association, multiple Goal/Milestone links,
+status enum/transitions, completion requirements, reopen/re-completion, execution session model,
+duration semantics, archive/delete, cascade behavior, Schedule cardinality, Progress eligibility,
+Review history/retention.
+No OPEN decision is silently converted into a permanent rule by this package.
+
+7. IMPLEMENTED CORE
+C04: title validation, target calendar date validation, Goal reference validation,
+non-negative integer position validation, same-Goal reorder-set validation, read-only contracts.
+C05: title/description validation, accessible/valid association checks, direct-vs-derived Goal
+consistency check when both are present, actual timestamp chronology validation, non-negative
+supplied duration validation, read-only contracts.
+Actual duration is not calculated. Planned/Schedule data is never converted to actual execution.
+
+8. TESTING
+Run focused tests from backend root:
+  npx vitest run tests/domain/C04 tests/domain/C05
+The tests require Vitest already installed in the backend project.
+This package has not been executed against the user's repository; verify imports, TypeScript
+configuration, lint rules, and existing naming conventions before merging.
+
+9. INTEGRATION CHECKLIST
+- Reconcile domain error codes with D06.
+- Reconcile shared IDs/types with D03.
+- Wire C01/C03/C04 ports using the established dependency direction.
+- Implement D01 persistence and constraints separately.
+- Add application services above these domain rules.
+- Add integration/security tests for cross-user isolation and cross-domain association.
+- Obtain Product Owner decisions before implementing blocked lifecycle/cardinality behavior.
+
+10. NON-GOALS
+No database schema, SQL, RLS, HTTP, auth, Goal/Milestone/Action CRUD service, Schedule,
+Progress calculation, Review, AI provider, frontend, or destructive lifecycle operation.

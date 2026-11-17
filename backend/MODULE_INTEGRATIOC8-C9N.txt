@@ -1,0 +1,90 @@
+FLOW-UP — C08 / C09 DOMAIN PACKAGE
+==================================
+
+MODULE DIRECTORY NAMING
+- C08 and C09 are module identifiers and remain the exact directory names.
+- Do not replace these identifiers with specification/domain titles.
+- Source: src/domain/C08 and src/domain/C09.
+- Tests: tests/domain/C08 and tests/domain/C09.
+
+C08 — PROGRESS RULES
+--------------------
+Owner:
+- Sole authoritative Progress calculation owner.
+
+Dependencies:
+- C03 Goal/hierarchy facts.
+- C05 Action status/eligibility/execution facts.
+- C06 Measurement definitions and records.
+
+Integrates:
+- C04 Milestone facts only if contribution is approved.
+- C07 Planning facts only if required by approved Progress rules.
+- C09 consumes authoritative Progress.
+
+Included:
+- Logical Progress result and source-reference contracts.
+- Explicit availability semantics: AVAILABLE, INSUFFICIENT_DATA,
+  NOT_APPLICABLE, INVALID_SOURCE.
+- Validation that unavailable results do not carry fabricated numeric values.
+- Source-reference and finite-number validation.
+- Approved-rule guard.
+- Read/history contracts.
+
+Intentionally not implemented because decisions remain OPEN:
+- Numeric/Boolean/range formulas.
+- Action eligibility and completion ratio.
+- Goal source combination, weighting and normalization.
+- Child Goal and Project aggregation.
+- Boundaries, clamping, rounding and precision.
+- Snapshot persistence, recalculation triggers and rule versioning.
+- Lifecycle interaction.
+
+C09 — REVIEW RULES
+------------------
+Owner:
+- Review and Review Notes.
+
+Dependencies:
+- C01 ownership/access and C03–C08 source contracts.
+
+Integrates:
+- C04 Milestone facts.
+- C08 authoritative Progress.
+
+Included:
+- Logical Review, scope, period, Note, source-status and summary contracts.
+- User/scope/period validation boundaries.
+- Explicit source availability distinctions.
+- Review Note ownership validation.
+- Guard requiring Progress data to originate from C08.
+- Source reader contracts and Planned-vs-Actual comparison shape.
+
+Intentionally not implemented because decisions remain OPEN:
+- Final scope combinations and Project Review.
+- Timezone, week/month boundary and period overlap policy.
+- Exact comparison/variance formulas.
+- Summary persistence and AI summary behavior.
+- Note edit/delete history.
+- Review lifecycle transitions and reopening.
+- On-demand vs persisted Review, snapshots and dynamic refresh.
+- Multiple Reviews per scope/period and completeness rules.
+
+ARCHITECTURAL BOUNDARIES
+------------------------
+- Domain code only: no UI, HTTP, database driver, persistence adapter or AI provider.
+- C08 does not mutate source domains or invent Progress formulas.
+- C09 does not mutate source domains or calculate authoritative Progress.
+- Missing/insufficient/not-applicable/invalid are distinct; none is silently zero.
+- Planned and Actual remain separate.
+- OPEN decisions remain OPEN; no unapproved lifecycle or snapshot policy is added.
+
+VERIFY
+------
+Run from backend/:
+
+  npx vitest run tests/domain/C08 tests/domain/C09
+  npx tsc --noEmit
+
+This package has not been executed inside the target repository. Confirm imports,
+TypeScript settings and Vitest configuration after extraction.

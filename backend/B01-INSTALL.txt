@@ -1,0 +1,23 @@
+FLOW-UP B01 — COPY-INSTRUCTIONS
+
+1. Extract this ZIP into the FLOW-UP repository root (the folder containing backend/).
+2. Allow overwrite ONLY for files under:
+   backend/src/modules/auth/
+   backend/tests/auth/
+3. Do not replace package.json, package-lock.json, tsconfig.json, .env, or any other project files.
+
+IMPORTANT CONFIGURATION:
+Your current backend package is CommonJS. Keep "type": "commonjs" in package.json.
+In backend/tsconfig.json, set:
+  "verbatimModuleSyntax": false
+
+Do not change other tsconfig settings for this step.
+
+Then run from backend:
+  npx tsc --noEmit
+  npx vitest run
+
+The Supabase adapter is a browser-session adapter using the public/publishable key.
+Do not use the service-role key in browser code. This starter does not implement
+database persistence, API JWT middleware, RLS policies, or B02 Workspace creation.
+B02 owns Personal Workspace initialization; B01 must not create it.

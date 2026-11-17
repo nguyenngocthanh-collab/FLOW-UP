@@ -1,0 +1,85 @@
+MODULE: B04 — Milestone Management
+STATUS: CORE SERVICE + CONTRACTS + UNIT TEST STARTER
+SPECIFICATION: CORE / PARTIALLY BLOCKED
+
+RESPONSIBILITIES
+- Create, retrieve, list, update and complete Milestones.
+- Ensure every Milestone belongs to a valid Goal.
+- Validate access to the owning Goal through B03.
+- Maintain Milestone fields and completion timestamp.
+
+DATA MODEL
+- id
+- goalId
+- title
+- description (nullable)
+- targetDate (nullable)
+- status (proposed: PENDING | COMPLETED; C04 approval required)
+- createdAt
+- updatedAt
+- completedAt (nullable)
+
+CORE OPERATIONS IMPLEMENTED IN THIS STARTER
+- createMilestone
+- getMilestone
+- listMilestonesByGoal
+- updateMilestone
+- completeMilestone
+
+BOUNDARIES
+- B01 provides authenticated Internal User Context.
+- B03 owns Goal and provides Goal retrieval/ownership validation.
+- B04 owns Milestone.
+- B05 owns Action and Action execution.
+- B08 owns progress calculation.
+- B04 does not create/update Goals or Actions.
+- B04 does not complete Goals or Actions.
+- B04 does not calculate progress.
+- Milestone is a checkpoint, not a daily task or a Child Goal.
+
+STATUS RULES
+- PENDING is the proposed initial status.
+- COMPLETED is set by explicit user completion.
+- completedAt is recorded on completion.
+- Reopen behavior remains OPEN.
+- IN_PROGRESS remains OPEN.
+- Goal archive/delete effects remain OPEN.
+- Status values and transitions require C04/Domain approval.
+
+ACTION RELATIONSHIP
+- Action–Milestone cardinality remains OPEN.
+- This module does not implement linking/unlinking Actions.
+- B05 must own Action updates and call agreed contracts.
+- Do not invent cardinality or write B05 persistence directly.
+
+NOT IMPLEMENTED / BLOCKED
+- Reopen Milestone.
+- Advanced Milestone lifecycle.
+- Action association mutations.
+- Automatic completion from Actions.
+- Automatic Goal completion.
+- Progress aggregation.
+- Database schema/migrations/RLS.
+- Production HTTP routes/API framework.
+- Notifications, recurring Milestones, nested Milestones, AI updates.
+
+INTEGRATION CONTRACT
+- B03 adapter must call B03 GoalService.getGoal(user, goalId).
+- Map B03 GOAL_NOT_FOUND to MILESTONE_GOAL_NOT_FOUND.
+- Map B03 ownership/access failures to MILESTONE_GOAL_ACCESS_DENIED.
+- D01 implements MilestoneRepository and database constraints.
+- D03/D04/D06 provide shared contracts, validation and error conventions.
+- C04 finalizes Milestone domain rules.
+- B05/C05 finalize Action–Milestone relationship rules.
+
+SECURITY
+- Resolve user identity from trusted B01 context.
+- Never trust user_id from frontend.
+- Verify owning Goal access for every read/write.
+- Database must enforce Goal foreign key and appropriate user-data protections.
+- Do not expose internal persistence errors.
+
+IMPORTANT
+- Current service treats updates to COMPLETED Milestones as disallowed. Confirm this rule with C04 before treating it as final.
+- The repository adapter must guarantee create and complete operations are persisted safely.
+- Do not mark B04 complete until B03 integration, D01 persistence, D08 security, C04 decisions and B05 relationship contract are implemented and tested.

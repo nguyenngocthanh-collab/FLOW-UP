@@ -1,0 +1,49 @@
+export type ReviewErrorCode =
+  | "REVIEW_NOT_FOUND"
+  | "REVIEW_ACCESS_DENIED"
+  | "REVIEW_INVALID_ID"
+  | "REVIEW_OWNER_REQUIRED"
+  | "REVIEW_OWNERSHIP_INVALID"
+  | "REVIEW_SCOPE_REQUIRED"
+  | "REVIEW_SCOPE_INVALID"
+  | "REVIEW_SCOPE_NOT_FOUND"
+  | "REVIEW_SCOPE_ACCESS_DENIED"
+  | "REVIEW_PERIOD_REQUIRED"
+  | "REVIEW_PERIOD_INVALID"
+  | "REVIEW_PERIOD_RANGE_INVALID"
+  | "REVIEW_SOURCE_INVALID"
+  | "REVIEW_SOURCE_ACCESS_DENIED"
+  | "REVIEW_SOURCE_INCOMPLETE"
+  | "REVIEW_SOURCE_UNAVAILABLE"
+  | "REVIEW_SOURCE_OWNERSHIP_INVALID"
+  | "REVIEW_PROGRESS_SOURCE_INVALID"
+  | "REVIEW_COMPARISON_INVALID"
+  | "REVIEW_SUMMARY_INVALID"
+  | "REVIEW_NOTE_NOT_FOUND"
+  | "REVIEW_NOTE_INVALID"
+  | "REVIEW_NOTE_ACCESS_DENIED"
+  | "REVIEW_STATUS_INVALID"
+  | "REVIEW_STATUS_TRANSITION_INVALID"
+  | "REVIEW_REOPEN_BLOCKED"
+  | "REVIEW_ARCHIVE_BLOCKED"
+  | "REVIEW_RESTORE_BLOCKED"
+  | "REVIEW_DELETE_BLOCKED"
+  | "REVIEW_SNAPSHOT_INVALID"
+  | "REVIEW_SNAPSHOT_CONFLICT"
+  | "REVIEW_REFRESH_BLOCKED"
+  | "REVIEW_DEPENDENCY_CONFLICT"
+  | "REVIEW_VALIDATION_FAILED";
+
+export interface ReviewError {
+  code: ReviewErrorCode;
+  message: string;
+  field?: string;
+}
+
+export type ReviewResult<T> =
+  | { valid: true; value: T }
+  | { valid: false; error: ReviewError };
+
+export function reviewError(code: ReviewErrorCode, message: string, field?: string): ReviewError {
+  return field ? { code, message, field } : { code, message };
+}

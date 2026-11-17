@@ -1,0 +1,22 @@
+export type ReviewUserContext = { userId: string; isAuthenticated: true };
+export type ReviewScope = { goalId?: string; periodStart?: string; periodEnd?: string; dailyPlanId?: string };
+export type ReviewSourceStatus = "AVAILABLE" | "EMPTY" | "PARTIAL" | "UNAVAILABLE" | "NOT_REQUESTED";
+export type ReviewSourceSection<T> = { status: ReviewSourceStatus; data: T | null; limitations: string[] };
+export type PlannedWorkItem = { actionId: string; scheduleId?: string; plannedStartAt?: string | null; plannedEndAt?: string | null };
+export type ActualExecutionItem = { actionId: string; status?: string; actualStartAt?: string | null; completedAt?: string | null; actualDuration?: number | null; executionRecordId?: string };
+export type PlannedActualMatchStatus = "MATCHED" | "PLANNED_WITHOUT_EXECUTION_RECORD" | "EXECUTION_WITHOUT_PLAN_MATCH" | "UNMATCHED";
+export type PlannedActualComparisonItem = { actionId: string; planned: PlannedWorkItem | null; actual: ActualExecutionItem | null; matchStatus: PlannedActualMatchStatus };
+export type PlannedActualComparison = { items: PlannedActualComparisonItem[]; limitations: string[] };
+export type ReviewSummary = {
+  scope: ReviewScope;
+  plannedWork: ReviewSourceSection<PlannedWorkItem[]>;
+  actualExecution: ReviewSourceSection<ActualExecutionItem[]>;
+  comparison: ReviewSourceSection<PlannedActualComparison>;
+  progress: ReviewSourceSection<unknown>;
+  measurement: ReviewSourceSection<unknown>;
+  limitations: string[];
+  generatedAt: string;
+};
+export type ReviewRecord = { id: string; userId: string; scope: ReviewScope; summary: ReviewSummary | null; note: string | null; createdAt: string; updatedAt: string };
+export type CreateReviewInput = { scope: ReviewScope; note?: string | null };
+export type UpdateReviewNoteInput = { content: string };

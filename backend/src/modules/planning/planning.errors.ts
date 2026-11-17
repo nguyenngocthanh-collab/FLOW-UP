@@ -1,0 +1,26 @@
+export type PlanningErrorCode =
+  | "DAILY_PLAN_NOT_FOUND"
+  | "DAILY_PLAN_ACCESS_DENIED"
+  | "DAILY_PLAN_ALREADY_EXISTS"
+  | "DAILY_PLAN_INVALID_DATE"
+  | "SCHEDULE_NOT_FOUND"
+  | "SCHEDULE_ACCESS_DENIED"
+  | "SCHEDULE_INVALID_START_TIME"
+  | "SCHEDULE_INVALID_END_TIME"
+  | "SCHEDULE_INVALID_TIME_RANGE"
+  | "SCHEDULE_INVALID_DATE_RANGE"
+  | "SCHEDULE_CONFLICT"
+  | "SCHEDULE_ACTION_NOT_FOUND"
+  | "SCHEDULE_ACTION_INVALID"
+  | "SCHEDULE_INVALID_RELATIONSHIP"
+  | "PLANNING_PROPOSAL_INVALID"
+  | "PLANNING_APPROVAL_REQUIRED"
+  | "PLANNING_VALIDATION_FAILED"
+  | "PLANNING_PERSISTENCE_ERROR";
+
+export class PlanningError extends Error {
+  constructor(public readonly code: PlanningErrorCode, message: string) {
+    super(message);
+    this.name = "PlanningError";
+  }
+}

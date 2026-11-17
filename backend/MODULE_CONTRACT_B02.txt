@@ -1,0 +1,75 @@
+MODULE: B02 — Workspace & Project Management
+PART: Workspace and Project MVP Core
+STATUS: APPLICATION SERVICE + CONTRACTS + UNIT TEST STARTER
+PERSISTENCE: D01 ADAPTER REQUIRED
+
+RESPONSIBILITIES
+- Initialize/retrieve exactly one Personal Workspace per Internal User.
+- Retrieve current Workspace and Workspace overview.
+- Create, retrieve, list, and update Projects.
+- Validate Workspace and Project ownership.
+- Expose Goal placement destination validation boundaries.
+- Assemble basic overviews without owning Goal data or progress calculations.
+
+DATA MODEL
+Workspace:
+- id
+- userId
+- name
+- createdAt
+- updatedAt
+
+Project:
+- id
+- workspaceId
+- name
+- description (nullable)
+- createdAt
+- updatedAt
+
+TRUST / OWNERSHIP
+- The user context must come from authenticated server/application context, not a caller-supplied userId field.
+- B02 resolves Workspace using the trusted user context.
+- Project ownership is checked through Workspace ownership.
+- D01 must enforce unique Workspace.user_id and atomic get-or-create.
+- Database-side ownership/RLS enforcement is still required.
+- Never expose privileged database credentials to clients.
+
+DEPENDENCIES
+- B01: authenticated Internal User Context.
+- B03: Goal summary and Goal placement contracts.
+- D01: Workspace/Project persistence.
+- D03: shared contracts.
+- D04: validation.
+- D06: common error response.
+- D08: security configuration/enforcement.
+
+BOUNDARIES
+- B02 does not implement Authentication.
+- B02 does not create/delete/update Goal entities.
+- B02 does not calculate progress.
+- B02 does not create Milestones, Actions, Measurements, Schedules, or Reviews.
+- B02 does not create Team Workspace, invitations, memberships, RBAC, or collaboration.
+- B02 does not create Workspace as a side effect of ordinary retrieval.
+- B02 does not implement Project deletion or archiving; those decisions remain open/out of MVP.
+
+D01 IMPLEMENTATION REQUIREMENTS
+- Unique constraint on Workspace.user_id.
+- Atomic getOrCreatePersonalWorkspace(userId) implementation.
+- Project.workspace_id foreign key to Workspace.id.
+- Immutable Project.id and Project.workspace_id through update operation.
+- created_at and updated_at maintained by persistence layer.
+- Transactions/constraints must prevent invalid references.
+
+OVERVIEW BEHAVIOUR
+- B02 owns Workspace and Project information only.
+- Goal counts/summary must be requested from B03 through GoalSummaryReader.
+- If B03 adapter is not connected, goalSummary is null; never fabricate zero progress/count data.
+- Progress belongs to B08.
+
+CURRENT LIMITATIONS
+- This package defines application service and D01/B03 ports.
+- No concrete database implementation, migrations, HTTP routes, API framework, RLS policies,
+  B03 Goal implementation, or end-to-end tests are included.
+- Do not mark B02 complete until D01 persistence, security enforcement, B03 integration,
+  and acceptance/security tests are implemented and verified.

@@ -1,0 +1,88 @@
+MODULE: B05 — Action Management
+STATUS: CORE APPLICATION SERVICE + CONTRACTS + UNIT TEST STARTER
+SPECIFICATION: READY TO CODE — CORE / PARTIALLY BLOCKED
+
+RESPONSIBILITIES
+- Create, retrieve, list and update Actions.
+- Manage basic Action status and explicit completion.
+- Record and retrieve basic actual execution data.
+- Validate Goal and optional Milestone associations.
+
+DATA MODEL
+Action:
+- id, goalId, milestoneId?, title, description?, status
+- createdAt, updatedAt, completedAt?, archivedAt?
+
+Execution data:
+- actionId, actualStartedAt?, actualCompletedAt?
+- actualDurationMinutes?, executionNote?
+
+BOUNDARIES
+- B03 owns Goal.
+- B04 owns Milestone.
+- B05 owns Action and its execution data.
+- B07 owns Daily Plan and Schedule.
+- B08 owns progress calculation.
+- B09 owns Review and planned-vs-actual comparison.
+- B05 does not create/update Goals or Milestones.
+- B05 does not create schedules or daily plans.
+- B05 does not calculate progress or create reviews.
+
+IMPLEMENTED CORE STARTER
+- createAction
+- getAction
+- listActionsByGoal
+- listActionsByMilestone
+- updateAction (title/description only)
+- updateActionStatus
+- completeAction
+- recordExecution
+- getExecutionData
+- Input and execution validation
+- B03/B04 adapter interfaces
+
+PROPOSED RULES — REQUIRE DOMAIN APPROVAL
+- Initial status TODO.
+- Status values TODO / IN_PROGRESS / COMPLETED.
+- Current starter supports TODO -> IN_PROGRESS and completion transitions.
+- Direct TODO -> COMPLETED is coded as a proposed transition and requires C05 confirmation.
+- Editing completed Actions is blocked by the starter; confirm with C05.
+- goalId is required by the proposed logical model; milestoneId is optional.
+- Exact Goal/Action/Milestone cardinality remains OPEN.
+
+NOT IMPLEMENTED / BLOCKED
+- Archive Action.
+- Delete Action (no destructive operation is exposed).
+- Restore Action.
+- Association changes in update.
+- Reopen Action.
+- CANCELLED status.
+- Multiple execution sessions / execution history.
+- Timer-based duration tracking.
+- Schedule or Daily Plan management.
+- Review comparison.
+- Progress calculation.
+- Database schema, migrations, RLS and production API routes.
+
+INTEGRATION CONTRACTS
+- ActionGoalAccess adapter must call B03 public application service.
+- ActionMilestoneAccess adapter must call B04 public application service and confirm same Goal.
+- D01 implements ActionRepository and execution persistence.
+- B07 references Action by ID; it must not copy Action records.
+- B09 consumes actual execution data through a read contract.
+- C05 finalizes status, completion, archive/delete and execution rules.
+- C03/C04/C05 finalize association rules.
+- C07/C09 define planning/review data requirements.
+
+SECURITY
+- Resolve user identity from trusted B01 context.
+- Never trust user_id supplied by frontend.
+- Verify Goal and Milestone access on every operation.
+- Database must enforce foreign keys and user-data protections.
+- Do not expose persistence internals in errors.
+
+IMPORTANT
+- Action archive/delete is intentionally not implemented because the specification marks lifecycle policy OPEN.
+- Relationship cardinality is intentionally not assumed.
+- Execution model is a single basic record in this starter, not a claim that multi-session execution is ruled out.
+- Do not mark B05 complete until B03/B04 adapters, D01 persistence, B07/B09 contracts, C05 decisions and security tests are implemented.

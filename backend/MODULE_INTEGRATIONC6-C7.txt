@@ -1,0 +1,89 @@
+FLOW-UP — C06 / C07 DOMAIN PACKAGE
+==================================
+
+MODULE DIRECTORY NAMING
+- C06 is the module identifier and directory name.
+- C07 is the module identifier and directory name.
+- Domain/specification titles are not used as replacement directory names.
+- Keep the modules separate: src/domain/C06, src/domain/C07 and tests/domain/C06, tests/domain/C07.
+
+C06 — MEASUREMENT RULES
+----------------------
+Owner:
+- Measurement definitions and Measurement Records.
+
+Dependencies:
+- C01 for User access/ownership.
+- C03 for Goal existence and scope.
+
+Integrates:
+- C08 reads Measurement facts and owns Progress calculation.
+- C09 reads Measurement facts and owns Review.
+
+Included:
+- Logical Measurement and MeasurementRecord models.
+- Goal association/access validation boundary.
+- Required name and timestamp validation.
+- Record-to-Measurement ownership validation.
+- Pluggable value validator boundary; no official value type enum is assumed.
+- Read-only contracts for consumers.
+
+Intentionally not implemented because policy is OPEN:
+- Official value type set and representation.
+- Unit catalog, precision/scale, conversion.
+- Baseline/target semantics and target direction enum.
+- Current/latest value selection and history ordering.
+- Backdated records, duplicate policy, correction/audit policy.
+- Definition versioning, lifecycle transitions, archive/delete/retention.
+- Progress formula or Review creation.
+
+C07 — PLANNING & SCHEDULE RULES
+-------------------------------
+Owner:
+- Daily Plan and Schedule (planned time only).
+
+Dependencies:
+- C01 for User identity/access.
+- C05 for Action validation and actual-execution boundary.
+
+Integrates:
+- C03 context through Action; no Goal mutation.
+- C08/C09 read planned-time facts.
+- B10 coordinates AI proposals and User approval.
+
+Included:
+- Logical DailyPlan and Schedule models.
+- User/Action/Daily Plan validation boundaries.
+- Calendar-date and start/end validation.
+- Schedule overlap detection without policy enforcement.
+- Explicit approval guard for AI proposal application.
+- Read-only planning facts contract.
+
+Intentionally not implemented because policy is OPEN:
+- One vs multiple Daily Plans per User/day; empty plan behavior.
+- Whether Schedule must belong to a Daily Plan.
+- Timezone source, UTC storage, DST and date-boundary policy.
+- Whether overlaps are warnings or blocking errors.
+- Multiple Schedule entries per Action.
+- Recurrence and lifecycle/history retention.
+- AI partial approval, batch failure and idempotency policy.
+- Any mutation of Action execution or Progress.
+
+ARCHITECTURAL BOUNDARIES
+------------------------
+- These folders contain domain-level models, validation and contracts only.
+- No UI, HTTP, database driver, persistence implementation, AI provider or framework dependency.
+- C06 does not calculate authoritative Progress and does not create Review.
+- C07 does not own Action or actual execution data.
+- Planned timestamps are not actual timestamps.
+- No unapproved enum, transition graph, cascade delete or policy is introduced.
+
+VERIFY
+------
+Run from backend/:
+
+  npx vitest run tests/domain/C06 tests/domain/C07
+  npx tsc --noEmit
+
+The package is a source package and has not been executed against the target repository.
+Check the repository's tsconfig and Vitest configuration before integration.

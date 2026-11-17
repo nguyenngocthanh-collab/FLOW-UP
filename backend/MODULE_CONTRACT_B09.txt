@@ -1,0 +1,57 @@
+B09 — REVIEW MANAGEMENT
+Implementation package: Standard Copy-In
+Status: Starter contracts/service scaffold only. The specification remains BLOCKED and this package is NOT production-ready.
+
+RESPONSIBILITY
+- Read and organize data from B05, B06, B07 and B08 through their owning-module contracts.
+- Compare planned work with recorded execution using approved matching rules only.
+- Retrieve authoritative progress from B08; B09 never calculates progress.
+- Generate factual summaries, preserve missing-data limitations, and keep user notes separate.
+- Own Review records/notes only after C09 and Product Owner decisions approve persistence.
+
+FILES
+- backend/src/modules/review/: types, errors, validation, repository ports, service, index.
+- backend/tests/review/: validation and service tests.
+
+OPEN DECISIONS — NOT APPROVED
+REVIEW-001 scope (Goal / period / Daily Plan / combination).
+REVIEW-002 persisted Review versus on-demand Review with notes only persisted.
+REVIEW-003 lifecycle/status.
+REVIEW-004 embedded note versus separate Review Note entity.
+REVIEW-005 live summary versus snapshot and refresh behavior.
+REVIEW-006 duplicate Reviews for same scope.
+REVIEW-007 dependency failure and partial-result policy.
+Also open: note length, matching rules, summary fields, source read contracts.
+All policy-dependent behavior is injected through ReviewRules. Test fixtures are not product decisions.
+
+OWNERSHIP
+- B05 owns Action execution; B06 owns Measurement; B07 owns plans/Schedules; B08 owns Progress; B03 owns Goal.
+- Never write source-module data or query private tables directly.
+- A Schedule does not prove execution. Missing execution is not proof of skipped work.
+- Do not fabricate historical progress from current progress or treat missing values as zero.
+- Source adapters must enforce nested ownership using authenticated context, not client user_id.
+- Persistence adapters must enforce owner-scoped reads/writes in the database layer too.
+
+GUARDRAILS / LIMITATIONS
+- createReviewRecord and persistSummary are policy flags; keep disabled until REVIEW-002/005 are approved.
+- Scope validation, note length, comparison, summary generation are configurable.
+- Current source retrieval is all-or-nothing when a reader throws. Per-source partial failure handling must wait for REVIEW-007 and D05/D06 contracts.
+- `crypto.randomUUID()` runtime/ID policy must be confirmed by D01/D03 before enabling persistence.
+- Review lifecycle, archive/delete, duplicate-scope behavior, and note editing after completion are not implemented.
+- No concrete B03/B05/B06/B07/B08 adapters, DB schema/migrations/RLS, API routes, transactions, A09 integration, or integration/security/E2E tests.
+
+INTEGRATION CHECKLIST
+[ ] Approve REVIEW-001..007 as applicable and C09 invariants.
+[ ] Confirm B05 execution, B06 measurement, B07 planning, B08 progress-history read contracts.
+[ ] Confirm matching semantics across Action and Schedule.
+[ ] Implement trusted owner-scoped source adapters.
+[ ] Implement D01 persistence and database-level authorization.
+[ ] Integrate D03/D05/D06/D07/D08 contracts.
+[ ] Add integration, security, and end-to-end tests.
+[ ] Integrate A09.
+
+TESTS (from backend)
+npx tsc --noEmit
+npx vitest run
+
+This is a bounded implementation scaffold, not a complete MVP implementation. Do not change the B09 specification status from BLOCKED based on this package.

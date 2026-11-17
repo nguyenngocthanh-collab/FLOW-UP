@@ -1,0 +1,23 @@
+export type ProgressErrorCode =
+  | "PROGRESS_GOAL_NOT_FOUND"
+  | "PROGRESS_ACCESS_DENIED"
+  | "PROGRESS_MEASUREMENT_NOT_FOUND"
+  | "PROGRESS_ACTION_NOT_FOUND"
+  | "PROGRESS_INVALID_INPUT"
+  | "PROGRESS_INVALID_MEASUREMENT_VALUE"
+  | "PROGRESS_INVALID_TARGET"
+  | "PROGRESS_INVALID_UNIT"
+  | "PROGRESS_INSUFFICIENT_DATA"
+  | "PROGRESS_UNSUPPORTED_CALCULATION"
+  | "PROGRESS_RULE_NOT_CONFIGURED"
+  | "PROGRESS_INVALID_HIERARCHY"
+  | "PROGRESS_AGGREGATION_FAILED"
+  | "PROGRESS_CALCULATION_FAILED"
+  | "PROGRESS_PERSISTENCE_ERROR";
+
+export class ProgressError extends Error {
+  constructor(public readonly code: ProgressErrorCode, message: string) {
+    super(message);
+    this.name = "ProgressError";
+  }
+}

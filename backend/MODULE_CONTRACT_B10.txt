@@ -1,0 +1,73 @@
+B10 — AI ORCHESTRATION
+Implementation package: Standard Copy-In
+Status: Controlled orchestration scaffold only. Specification remains BLOCKED; this is NOT production-ready.
+
+RESPONSIBILITY
+- Build AI requests from minimal, user-authorized context.
+- Call one selected provider through an adapter.
+- Validate provider response and structured output through injected validation.
+- Return validated non-proposal outputs (clarification and feasibility).
+- Keep Goal Tree and Daily Plan outputs as proposals, separate from official domain data.
+- Apply explicit user-approved proposal changes only through normal owning-module operations.
+
+FILES
+- backend/src/modules/ai-orchestration/: types, errors, validation, repository/provider/context ports, service, index.
+- backend/tests/ai-orchestration/: validation and service tests.
+
+OPEN DECISIONS — NOT APPROVED
+- DEC-021 / AI-001: provider and model selection.
+- AI-002: minimum context per capability.
+- AI-003: proposal persistence model.
+- AI-004: official proposal lifecycle.
+- AI-005: item-level partial approval rules by proposal type.
+- AI-006: multi-module atomicity, partial application and recovery.
+- AI-007: usage limits and retry policy.
+- AI-008: provider retention/privacy settings.
+- AI-009: prompt/model version traceability.
+- Provider fallback is OPEN; no automatic fallback is implemented.
+- Proposal schema, exact response contracts, and raw-response retention remain OPEN.
+
+GUARDRAILS
+- No provider SDK, provider name, model, API key, or network client is selected in this package.
+- Provider credentials must remain server-side in the eventual adapter.
+- Context is loaded through AIContextReader; the adapter must validate ownership through B02–B08 owner modules and include only relevant, authorized data.
+- Client-supplied userId is never accepted as proof of ownership. Service user context must originate from trusted B01 integration.
+- AI output is untrusted. AIOutputValidator must perform structural, semantic and domain-contract validation before output is used.
+- `execute` returns validated clarification/feasibility data. Proposal operations are blocked unless `proposalPersistenceEnabled` is explicitly enabled after AI-003 and related contracts are approved.
+- Proposal editing/approval status transitions in this scaffold are provisional and must be replaced/confirmed by C09/D03-equivalent approved contracts.
+- Proposal application is delegated to AIProposalDomainApplier; it must call B03/B04/B05/B06/B07 normal operations and must never write directly to their persistence.
+- Approval requires an explicit selection object. An empty selection is allowed by the current shape and must be disallowed or interpreted only after AI-005 is approved.
+- The current service calls domain application through an adapter but does not provide transactionality, idempotency keys, or safe recovery. Do not enable production application until AI-006 and D01/D05 contracts are settled.
+- Provider errors are normalized heuristically from common status/name fields; replace with D06/provider-specific adapter mapping.
+- No raw provider response persistence or sensitive prompt logging is implemented.
+
+NOT INCLUDED
+- Concrete AI provider adapter or SDK.
+- Context adapters for B02–B08.
+- E01–E05 capability implementations/prompts.
+- Durable proposal DB schema, migrations, RLS, or persistence adapter.
+- Concrete domain validation/application adapters.
+- API routes/controllers, usage metering, quota enforcement, retry/backoff, cancellation.
+- Atomic multi-module apply, idempotency/recovery, audit trail.
+- A10 frontend integration, integration/security/E2E tests.
+
+INTEGRATION CHECKLIST
+[ ] Approve DEC-021 and select provider/model.
+[ ] Define D03 request, response and proposal contracts.
+[ ] Define minimum authorized context per E01–E05.
+[ ] Implement secure server-side provider adapter under D08.
+[ ] Implement D04 structural/semantic validators and relevant domain validation.
+[ ] Confirm proposal persistence and lifecycle (AI-003/AI-004).
+[ ] Confirm partial approval semantics (AI-005).
+[ ] Design atomicity/partial failure/recovery/idempotency (AI-006).
+[ ] Define usage limits, retries, privacy/retention and traceability (AI-007..009).
+[ ] Implement context readers and owner checks across B02–B08.
+[ ] Implement domain applier through B03–B07 application contracts.
+[ ] Add provider, integration, security and E2E tests.
+[ ] Integrate A10.
+
+TESTS (from backend)
+npx tsc --noEmit
+npx vitest run
+
+This package is a bounded application orchestration scaffold, not an autonomous agent and not a completed MVP AI integration.

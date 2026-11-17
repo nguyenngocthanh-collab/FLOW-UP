@@ -1,0 +1,52 @@
+B08 — Progress Engine
+Status: Starter application service/contracts. No authoritative formulas are implemented.
+
+Responsibilities:
+- Central application service for Measurement Progress, Action Completion, Goal Progress,
+  Child Goal Aggregation, target comparison and progress summaries.
+- B08 is the only authoritative progress-calculation module.
+- B08 does not mutate Goal, Action or Measurement source data.
+- B08 does not automatically complete Goals or Actions.
+
+Critical C08 boundary:
+- All calculation behavior is injected through ProgressRules.
+- No formula is implemented or assumed in this bundle.
+- The included tests use fake rules returning RULE_NOT_CONFIGURED / null progress.
+- A null progress value is intentional; it must not be replaced with a guessed percentage.
+- Measurement direction, baseline, action eligibility, weights, source combination,
+  missing-data handling and child aggregation remain OPEN.
+
+Source integration:
+- ProgressSourceAccess is a port for B03/B05/B06 data retrieval and ownership validation.
+- The current service summary path checks Goal access, then obtains a preassembled source bundle.
+- Production adapters must independently enforce Measurement and Action ownership through B06/B05,
+  and verify all source records belong to the same authorized Goal/user scope.
+- Do not trust client-supplied progress inputs as authoritative in production; load them through adapters.
+
+Operations included:
+- calculateMeasurementProgress
+- calculateActionCompletion
+- calculateGoalProgress
+- aggregateChildGoalProgress
+- compareMeasurementWithTarget
+- getGoalProgressSummary
+- getProgressSummary
+- getProgressDataForReview
+- optional saveProgressSnapshot port
+
+Not implemented:
+- Concrete B03/B05/B06 adapters
+- Approved C08 formulas
+- Goal hierarchy cycle detection (must be guaranteed by B03/C03 and verified by adapter)
+- Project-level progress aggregation
+- Progress history/snapshot persistence (C08/C09/D01 decision OPEN)
+- API routes/controllers (D05)
+- shared error integration (D06)
+- production security/integration tests
+
+Important:
+- calculate* methods are pure application delegation surfaces and require validated, trusted inputs.
+- Do not expose them directly to untrusted clients as arbitrary calculation endpoints.
+- Production UI should call summary operations which retrieve source data from trusted module adapters.
+- saveProgressSnapshot must remain disabled until history/snapshot strategy is approved.
+- Do not treat this bundle as production-ready until C08 rules and source adapters are integrated.

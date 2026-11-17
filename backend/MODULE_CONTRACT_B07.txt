@@ -1,0 +1,43 @@
+B07 — Planning & Scheduling
+Status: Starter application service/contracts. Not production-integrated.
+
+Operations:
+- createDailyPlan / getDailyPlan / updateDailyPlan
+- addActionToDailyPlan / removeActionFromDailyPlan
+- createSchedule / getSchedule / updateSchedule / deleteSchedule
+- getSchedulesByDateRange
+- applyApprovedPlanningProposal
+
+Ownership and dependencies:
+- Daily Plan is user-owned.
+- Schedule ownership is validated through PlanningAccess and B05 ActionAccess adapters.
+- Action remains owned by B05; B07 never updates Action status or execution data.
+- Repository and access interfaces must be connected to D01, B01, B05, C01 and C07.
+
+OPEN decisions are deliberately injected or left uncommitted:
+- Daily Plan uniqueness is currently assumed by userId + date in create flow; confirm C07 before production.
+- Schedule cardinality and DailyPlan relationship are not enforced beyond optional dailyPlanId.
+- Time-zone interpretation is not selected; datetime values are validated as parseable instants only.
+- Conflict policy is delegated to PlanningRules.
+- Cross-day schedules / date boundary behavior is delegated to C07.
+- Schedule history/deletion policy is not implemented.
+- Action lifecycle effects are not implemented.
+- Proposal approval is checked through a trusted B10 adapter; a client-supplied `approved: true` alone is not sufficient in production.
+
+AI-approved Planning:
+- Uses the same createSchedule application operation as manual/calendar flows.
+- This starter applies proposal schedules sequentially. It is NOT atomic; D01 must provide a transaction/batch operation before production use.
+- Proposal schema is a minimal application contract, not a final B10 shared contract.
+
+Not implemented:
+- Concrete database adapter/schema/migrations (D01)
+- API routes/controllers (D05)
+- shared error integration (D06)
+- concrete B05 Action adapter
+- production approval provenance from B10
+- atomic batch transaction
+- calendar UI or frontend integration
+- recurrence, automatic optimization, notifications, external calendar sync
+
+No Actual Execution Time or Action status fields are stored or changed by B07.
+Do not treat this bundle as production-ready until OPEN decisions and dependencies are resolved.
