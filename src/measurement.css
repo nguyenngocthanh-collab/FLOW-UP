@@ -40,6 +40,33 @@
 .review-evidence > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 12px; background: var(--soft); }
 .review-evidence > div span { color: var(--muted); font-size: 13px; }
 .review-evidence__note { color: var(--muted); }
+.review-page { display: grid; gap: 16px; }
+.review-page__toolbar { display: flex; justify-content: space-between; align-items: end; gap: 16px; }
+.review-page__toolbar .field { flex: 1; max-width: 420px; }
+.review-page__intro { display: grid; gap: 8px; }
+.review-page__intro h2, .review-section .panel__heading h2 { margin: 0; }
+.review-page__intro p { margin: 0; color: var(--muted); }
+.review-page__summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.review-stat { display: grid; gap: 8px; }
+.review-stat > span { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.review-stat > strong { color: var(--ink); font-size: 24px; }
+.review-stat > small, .review-list small, .review-measurement small { color: var(--muted); }
+.review-section { display: grid; gap: 12px; }
+.review-list, .review-measurement ol { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.review-list > li { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.review-list > li:last-child { border-bottom: 0; }
+.review-list > li > div, .review-measurement > div { display: grid; gap: 4px; }
+.review-list p { margin: 8px 0 0; color: var(--muted); }
+.review-list__mark { display: grid; width: 26px; height: 26px; flex: 0 0 26px; place-items: center; border-radius: 50%; background: var(--soft); color: var(--muted); }
+.review-list__mark--done { background: #e7f3ec; color: var(--green); }
+.review-measurement { display: grid; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.review-measurement:last-child { border-bottom: 0; }
+.review-measurement > div { display: flex; justify-content: space-between; gap: 12px; }
+.review-measurement ol { padding-left: 12px; border-left: 2px solid var(--line); }
+.review-measurement li { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 2px 12px; }
+.review-measurement li time { color: var(--muted); font-size: 12px; }
+.review-measurement li small { grid-column: 1 / -1; }
+@media (max-width: 720px) { .review-page__summary { grid-template-columns: 1fr; } .review-page__toolbar { align-items: stretch; flex-direction: column; } .review-measurement > div { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 640px) { .home-next-grid { grid-template-columns: 1fr; } }
 
 @media (min-width: 720px) {

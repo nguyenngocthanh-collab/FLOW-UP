@@ -162,6 +162,40 @@ describe('FLOW-UP application', () => {
     expect(await screen.findByText('2 runs')).toBeInTheDocument();
   });
 
+  it('opens an evidence-based Goal review with separate outcome and action progress', async () => {
+    sessionStorage.setItem('flow-up.access-token', 'session-token');
+    const goal = {
+      id: 'goal-review', workspaceId: 'ws-1', projectId: null, parentGoalId: null,
+      title: 'Run a 5K', description: null, targetDate: null, status: 'ACTIVE',
+      createdAt: '', updatedAt: '', archivedAt: null,
+    };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const data = url.endsWith('/api/auth/session')
+        ? { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } }
+        : url.endsWith('/api/workspaces/overview')
+          ? { workspace: { id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }, projects: [], goalSummary: null }
+          : url.endsWith('/api/goals/hierarchy') ? [{ goal, children: [] }]
+            : url.endsWith('/api/goals') ? [goal]
+              : url.endsWith('/api/progress/goals/goal-review') ? { goalId: goal.id, goalProgress: { goalId: goal.id, progressValue: null, calculationStatus: 'RULE_NOT_CONFIGURED' }, actionCompletion: { totalActions: 2, completedActions: 1, incompleteActions: 1, completionValue: 50, calculationStatus: 'CALCULATED' }, measurementProgress: [], childGoalProgress: [] }
+                : url.endsWith('/api/goals/goal-review/actions') ? [{ id: 'action-review', goalId: goal.id, title: 'Complete first run', status: 'COMPLETED', archivedAt: null }]
+                  : url.endsWith('/api/goals/goal-review/measurements') ? [{ id: 'measurement-review', goalId: goal.id, label: 'Distance', valueType: 'NUMBER', unit: 'km', targetValue: 5, archivedAt: null }]
+                    : url.endsWith('/api/actions/action-review/execution') ? { actionId: 'action-review', actualCompletedAt: '2026-11-17T09:00:00Z', executionNote: 'Ran in the park' }
+                      : url.endsWith('/api/measurements/measurement-review/history') ? [{ id: 'record-review', measurementId: 'measurement-review', value: 2.5, recordedAt: '2026-11-17T09:00:00Z', note: null }]
+                        : [];
+      return { ok: true, status: 200, json: async () => ({ success: true, data }) };
+    }));
+
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Your space to grow' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Review/ }));
+    expect(await screen.findByRole('heading', { name: 'Run a 5K' })).toBeInTheDocument();
+    expect(screen.getByText('Not configured')).toBeInTheDocument();
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+    expect(await screen.findByText('Ran in the park')).toBeInTheDocument();
+    expect(await screen.findByText('2.5 km')).toBeInTheDocument();
+  });
+
   it('runs the structured goal discovery path and displays proposal items separately', async () => {
     sessionStorage.setItem('flow-up.access-token', 'session-token');
     const proposal = {

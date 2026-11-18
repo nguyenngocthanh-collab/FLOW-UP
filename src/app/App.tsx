@@ -37,7 +37,7 @@ import {
 import '../assistant.css';
 import '../measurement.css';
 
-type Page = 'home' | 'projects' | 'goals' | 'planning' | 'assistant';
+type Page = 'home' | 'projects' | 'goals' | 'planning' | 'review' | 'assistant';
 type Notice = { kind: 'success' | 'error'; text: string } | null;
 function messageOf(error: unknown): string {
   return error instanceof Error
@@ -298,6 +298,7 @@ function Sidebar({
     { id: 'home', label: 'Overview', icon: '◫' },
     { id: 'projects', label: 'Projects', icon: '▦' },
     { id: 'goals', label: 'Goals', icon: '◎' },
+    { id: 'review', label: 'Review', icon: '↗' },
     { id: 'planning', label: 'Planning', icon: '▤' },
   ];
   return (
@@ -582,6 +583,95 @@ function GoalAssistantPage({
       )}
     </div>
   );
+}
+
+function GoalReviewPage({ goals, initialGoalId }: { goals: Goal[]; initialGoalId: string | null }) {
+  const [goalId, setGoalId] = useState(initialGoalId ?? goals[0]?.id ?? '');
+  const [refresh, setRefresh] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [data, setData] = useState<{
+    progress: ProgressSummary;
+    actions: Action[];
+    executions: Record<string, Execution | null>;
+    measurements: { measurement: Measurement; history: MeasurementRecord[] }[];
+    schedules: Schedule[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!goalId && goals.length) setGoalId(initialGoalId ?? goals[0].id);
+  }, [goalId, goals, initialGoalId]);
+
+  useEffect(() => {
+    if (!goalId) { setData(null); return; }
+    let active = true;
+    setLoading(true);
+    setError('');
+    const end = new Date();
+    const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
+    Promise.all([
+      api.progress(goalId),
+      api.actions(goalId),
+      api.measurements(goalId),
+      api.schedules(dateOnly(start), dateOnly(end)),
+    ]).then(async ([progress, actions, measurements, schedules]) => {
+      const [executionEntries, measurementEntries] = await Promise.all([
+        Promise.all(actions.filter((action) => !action.archivedAt).map(async (action) => [action.id, await api.execution(action.id)] as const)),
+        Promise.all(measurements.filter((measurement) => !measurement.archivedAt).map(async (measurement) => [measurement, await api.measurementHistory(measurement.id)] as const)),
+      ]);
+      if (!active) return;
+      setData({ progress, actions: actions.filter((action) => !action.archivedAt), executions: Object.fromEntries(executionEntries),
+        measurements: measurementEntries.map(([measurement, history]) => ({ measurement, history })), schedules });
+    }).catch((reason: unknown) => {
+      if (active) { setData(null); setError(messageOf(reason)); }
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [goalId, refresh]);
+
+  const selectedGoal = goals.find((goal) => goal.id === goalId);
+  return <div className="review-page">
+    <div className="review-page__toolbar">
+      <label className="field"><span>Goal</span><select aria-label="Review Goal" value={goalId} onChange={(event) => setGoalId(event.target.value)}>
+        {goals.map((goal) => <option key={goal.id} value={goal.id}>{goal.title}</option>)}
+      </select></label>
+      <Button variant="secondary" type="button" disabled={loading || !goalId} onClick={() => setRefresh((value) => value + 1)}>{loading ? 'Updating…' : 'Refresh evidence'}</Button>
+    </div>
+    {!goals.length ? <section className="panel"><h2>No Goals to review</h2><p>Create a Goal to see its execution and measurement evidence here.</p></section>
+      : error ? <section className="panel inline-error" role="alert">Review evidence could not be loaded: {error}</section>
+      : loading && !data ? <section className="panel"><p>Loading saved evidence…</p></section>
+      : data && <>
+        <section className="panel review-page__intro">
+          <span className="eyebrow">GOAL REVIEW · LAST 30 DAYS</span>
+          <h2>{selectedGoal?.title ?? 'Goal review'}</h2>
+          <p>Review recorded work and measurements. Outcome progress appears only when a calculation rule is configured.</p>
+        </section>
+        <div className="review-page__summary">
+          <article className="panel review-stat"><span>OUTCOME PROGRESS</span><strong>{data.progress.goalProgress.progressValue == null ? 'Not configured' : `${Math.round(data.progress.goalProgress.progressValue)}%`}</strong><small>{data.progress.goalProgress.calculationStatus.replaceAll('_', ' ').toLowerCase()}</small></article>
+          <article className="panel review-stat"><span>ACTIONS COMPLETE</span><strong>{data.progress.actionCompletion?.totalActions ? `${data.progress.actionCompletion.completedActions} / ${data.progress.actionCompletion.totalActions}` : 'No active Actions'}</strong><small>Completed work, separate from Goal outcome</small></article>
+          <article className="panel review-stat"><span>MEASUREMENTS WITH VALUES</span><strong>{data.measurements.filter((entry) => entry.history.length > 0).length} / {data.measurements.length}</strong><small>Saved records for this Goal</small></article>
+        </div>
+        <section className="panel review-section">
+          <div className="panel__heading"><h2>Planned and completed work</h2><span>{data.schedules.length} scheduled sessions in the period</span></div>
+          {data.actions.length ? <ul className="review-list">{data.actions.map((action) => {
+            const execution = data.executions[action.id];
+            const scheduled = data.schedules.filter((schedule) => schedule.actionId === action.id);
+            return <li key={action.id}><span className={`review-list__mark ${action.status === 'COMPLETED' ? 'review-list__mark--done' : ''}`}>{action.status === 'COMPLETED' ? '✓' : '·'}</span>
+              <div><strong>{action.title}</strong><small>{action.status.replaceAll('_', ' ').toLowerCase()}{scheduled.length ? ` · ${scheduled.length} planned session${scheduled.length === 1 ? '' : 's'}` : ''}</small>
+                {execution?.executionNote && <p>{execution.executionNote}</p>}
+                {execution?.actualCompletedAt && <small>Completed {dateLabel(execution.actualCompletedAt)}</small>}
+              </div></li>;
+          })}</ul> : <p className="empty-line">No Actions recorded for this Goal yet.</p>}
+        </section>
+        <section className="panel review-section">
+          <div className="panel__heading"><h2>Measurement history</h2><span>Recorded values, newest first</span></div>
+          {data.measurements.length ? data.measurements.map(({ measurement, history }) => <article className="review-measurement" key={measurement.id}>
+            <div><strong>{measurement.label}</strong><small>{measurement.targetValue === null ? 'No target' : `Target ${measurement.targetValue}${measurement.unit ? ` ${measurement.unit}` : ''}`}</small></div>
+            {history.length ? <ol>{history.slice(0, 5).map((record) => <li key={record.id}><strong>{record.value}{measurement.unit ? ` ${measurement.unit}` : ''}</strong><time>{dateLabel(record.recordedAt)}</time>{record.note && <small>{record.note}</small>}</li>)}</ol> : <p className="empty-line">No values recorded.</p>}
+          </article>) : <p className="empty-line">No Measurements for this Goal yet.</p>}
+        </section>
+      </>}
+  </div>;
 }
 
 export function App() {
@@ -1243,7 +1333,7 @@ export function App() {
           ? 'Goals & milestones'
           : page === 'assistant'
             ? 'Goal discovery'
-            : 'Plan your day';
+            : page === 'review' ? 'Review your progress' : 'Plan your day';
   const pageSubtitle =
     page === 'home'
       ? 'A little progress adds up to a lot.'
@@ -1253,7 +1343,7 @@ export function App() {
           ? 'Keep your bigger picture close.'
           : page === 'assistant'
             ? 'Turn an intention into a plan you can review and shape.'
-            : 'Make time for the work that matters.';
+            : page === 'review' ? 'See what happened, what you measured, and what remains unknown.' : 'Make time for the work that matters.';
 
   return (
     <div className="app-layout">
@@ -1373,6 +1463,8 @@ export function App() {
               onManual={() => setPage('goals')}
             />
           )}
+
+          {page === 'review' && <GoalReviewPage goals={goals} initialGoalId={selectedGoal?.id ?? null} />}
 
           {page === 'home' && (
             <>
