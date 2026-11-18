@@ -40,6 +40,7 @@ import {
 import '../assistant.css';
 import '../measurement.css';
 import './workspace-manager.css';
+import { GoalWorkspace } from '../goals/GoalWorkspace';
 import { PlanningCalendar } from '../planning/PlanningCalendar';
 
 type Page = 'workspaces' | 'home' | 'projects' | 'goals' | 'planning' | 'review' | 'assistant';
@@ -376,38 +377,6 @@ function Sidebar({
   );
 }
 
-function GoalTree({
-  nodes,
-  selectedId,
-  onSelect,
-  depth = 0,
-}: {
-  nodes: GoalNode[];
-  selectedId: string | null;
-  onSelect: (goal: Goal) => void;
-  depth?: number;
-}) {
-  return (
-    <>{nodes.map((node) => <GoalTreeNode key={node.goal.id} node={node} selectedId={selectedId} onSelect={onSelect} depth={depth} />)}</>
-  );
-}
-
-function GoalTreeNode({ node, selectedId, onSelect, depth }: {
-  node: GoalNode; selectedId: string | null; onSelect: (goal: Goal) => void; depth: number;
-}) {
-  const [expanded, setExpanded] = useState(true);
-  const { goal, children } = node;
-  return <div className="goal-tree__node">
-    <div className="goal-tree__node-head">
-      <button className={`tree-row ${selectedId === goal.id ? 'tree-row--active' : ''}`} style={{ paddingLeft: `${14 + depth * 18}px` }} onClick={() => onSelect(goal)}>
-        <span className="tree-row__branch">{depth ? '↳' : '○'}</span><span>{goal.title}</span>
-        <span className="tree-row__status">{goal.status.toLowerCase().replaceAll('_', ' ')}</span>
-      </button>
-      {children.length > 0 && <button type="button" className="tree-toggle" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${goal.title}`} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? '−' : '+'}</button>}
-    </div>
-    {expanded && children.map((child) => <GoalTreeNode key={child.goal.id} node={child} selectedId={selectedId} onSelect={onSelect} depth={depth + 1} />)}
-  </div>;
-}
 
 function GoalAssistantPage({
   onApplied,
@@ -914,7 +883,7 @@ export function App() {
   }, [page, user, scheduleRefresh, handleError]);
 
   useEffect(() => {
-    if (!['planning', 'home'].includes(page) || !user) {
+    if (!['planning', 'home', 'goals'].includes(page) || !user) {
       setAvailableActions([]);
       setActionsLoaded(false);
       setActionsLoadError(false);
@@ -1414,31 +1383,6 @@ export function App() {
                 <span>＋</span> New project
               </Button>
             )}
-            {page === 'goals' && (
-              <div className="heading-actions">
-                <select
-                  aria-label="Filter by project"
-                  value={selectedProject?.id ?? ''}
-                  onChange={(event) => {
-                    const project =
-                      projects.find((item) => item.id === event.target.value) ??
-                      null;
-                    setSelectedProject(project);
-                    setSelectedGoal(null);
-                  }}
-                >
-                  <option value="">All projects</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-                <Button onClick={() => setModal('goal')}>
-                  <span>＋</span> New goal
-                </Button>
-              </div>
-            )}
             {page === 'assistant' && (
               <Button variant="secondary" onClick={() => setPage('goals')}>
                 Continue manually
@@ -1675,282 +1619,59 @@ export function App() {
           )}
 
           {page === 'goals' && (
-            <div className="goals-layout">
-              <section className="panel hierarchy-panel">
-                <div className="panel__heading">
-                  <div>
-                    <h2>Goal map</h2>
-                    <p>
-                      {selectedProject
-                        ? selectedProject.name
-                        : 'All goals across your workspace'}
-                    </p>
-                  </div>
-                  <span className="count-pill">
-                    {displayedGoals.length} goals
-                  </span>
-                </div>
-                {visibleHierarchy.length ? (
-                  <div className="goal-tree">
-                    <GoalTree
-                      nodes={visibleHierarchy}
-                      selectedId={selectedGoal?.id ?? null}
-                      onSelect={setSelectedGoal}
-                    />
-                  </div>
-                ) : (
-                  <EmptyState
-                    icon="◎"
-                    title="Your goal map is waiting"
-                    body={
-                      selectedProject
-                        ? 'Add a goal to this project to get started.'
-                        : 'Create a project, then add a goal to bring your plans to life.'
-                    }
-                    action={
-                      <Button
-                        onClick={() =>
-                          selectedProject
-                            ? setModal('goal')
-                            : setPage('projects')
-                        }
-                      >
-                        {selectedProject ? 'Add a goal' : 'Explore projects'}
-                      </Button>
-                    }
-                  />
-                )}
-              </section>
-              <section className="goal-detail">
-                {selectedGoal ? (
-                  <>
-                    <div className="goal-detail__header">
-                      <div>
-                        <span className="eyebrow">GOAL DETAILS</span>
-                        <h2>{selectedGoal.title}</h2>
-                      </div>
-                      <span
-                        className={`status-badge status-badge--${selectedGoal.status.toLowerCase()}`}
-                      >
-                        {selectedGoal.status.replaceAll('_', ' ').toLowerCase()}
-                      </span>
-                    </div>
-                    <p className="goal-description">
-                      {selectedGoal.description ||
-                        'Add detail to keep the reason behind this goal close.'}
-                    </p>
-                    <div className="goal-meta">
-                      <span>◷ {dateLabel(selectedGoal.targetDate)}</span>
-                      <span>
-                        ▦{' '}
-                        {projects.find(
-                          (item) => item.id === selectedGoal.projectId,
-                        )?.name ?? 'Workspace goal'}
-                      </span>
-                    </div>
-                    <div className="progress-block">
-                      <div className="progress-block__heading">
-                        <strong>Outcome progress</strong>
-                        <span>
-                          {!progress
-                            ? 'Loading'
-                            : progress.goalProgress.progressValue == null
-                            ? progress.goalProgress.calculationStatus === 'RULE_NOT_CONFIGURED'
-                              ? 'Not configured'
-                              : 'Not enough data'
-                            : `${Math.round(progress.goalProgress.progressValue)}%`}
-                        </span>
-                      </div>
-                      {progress?.goalProgress.progressValue != null && <div className="progress-track"><span style={{ width: `${Math.max(0, Math.min(100, progress.goalProgress.progressValue))}%` }} /></div>}
-                      {progress?.actionCompletion?.totalActions ? <div className="progress-block__execution">
-                        <div className="progress-block__heading"><span>Actions complete</span><strong>{progress.actionCompletion.completedActions} / {progress.actionCompletion.totalActions}</strong></div>
-                        <div className="progress-track"><span style={{ width: `${progress.actionCompletion.completionValue ?? 0}%` }} /></div>
-                      </div> : <small>{progress ? 'No actions to count yet.' : 'Loading progress…'}</small>}
-                    </div>
-                    <div className="detail-actions">
-                      <Button
-                        variant="secondary"
-                        onClick={() => setModal('child')}
-                      >
-                        ＋ Add child goal
-                      </Button>
-                      <Button
-                        variant="quiet"
-                        onClick={() => setModal('milestone')}
-                      >
-                        ＋ Milestone
-                      </Button>
-                      <Button
-                        variant="quiet"
-                        onClick={() => setModal('action')}
-                      >
-                        ＋ Action
-                      </Button>
-                    </div>
-                    <div className="detail-section">
-                      <div className="section-heading">
-                        <h3>Milestones</h3>
-                        <span>{milestones.length}</span>
-                      </div>
-                      {milestones.length ? (
-                        milestones.map((milestone) => (
-                          <div className="milestone-item" key={milestone.id}><div className="item-row">
-                            <span
-                              className={`check-circle ${milestone.status === 'COMPLETED' ? 'check-circle--done' : ''}`}
-                            >
-                              {milestone.status === 'COMPLETED' ? '✓' : ''}
-                            </span>
-                            <span className="item-row__body">
-                              <strong>{milestone.title}</strong>
-                              <small>
-                                {milestone.targetDate
-                                  ? dateLabel(milestone.targetDate)
-                                  : milestone.status.toLowerCase()}
-                              </small>
-                            </span>
-                            {milestone.status !== 'COMPLETED' && <button type="button" className="text-link" onClick={() => setEditingMilestone(editingMilestone === milestone.id ? null : milestone.id)}>{editingMilestone === milestone.id ? 'Close' : 'Edit'}</button>}
-                            {milestone.status !== 'COMPLETED' && <button type="button" className="text-link" onClick={() => completeMilestone(milestone)}>Complete</button>}
-                          </div>
-                          {editingMilestone === milestone.id && <form className="measurement-form" onSubmit={(event) => void saveMilestoneEdit(event, milestone)}><Field label="Milestone" name="title" defaultValue={milestone.title} required /><Field label="Target date" name="targetDate" type="date" defaultValue={milestone.targetDate ?? ''} /><Button>Save milestone</Button></form>}
-                          </div>
-                        ))
-                      ) : (
-                        <p className="empty-line">No milestones yet.</p>
-                      )}
-                    </div>
-                    <div className="detail-section">
-                      <div className="section-heading">
-                        <h3>Actions</h3>
-                        <span>{actions.length}</span>
-                      </div>
-                      {actions.length ? (
-                        actions.map((action) => (
-                          <div className="action-item" key={action.id}><div className="action-row">
-                            <span className="action-row__mark">
-                              {action.status === 'COMPLETED' ? '✓' : '↗'}
-                            </span>
-                            <span className="item-row__body">
-                              <strong>{action.title}</strong>
-                              <small>
-                                {action.status
-                                  .replaceAll('_', ' ')
-                                  .toLowerCase()}
-                                {action.milestoneId
-                                  ? ` · ${milestones.find((item) => item.id === action.milestoneId)?.title ?? 'Milestone'}`
-                                  : ''}
-                              </small>
-                            </span>
-                            {action.status !== 'COMPLETED' && <button
-                              type="button"
-                              className="text-link"
-                              onClick={() => setEditingAction(editingAction === action.id ? null : action.id)}
-                            >
-                              {editingAction === action.id ? 'Close' : 'Edit'}
-                            </button>}
-                            <button
-                              type="button"
-                              className="text-link execution-link"
-                              onClick={() => openExecution(action)}
-                            >
-                              Log
-                            </button>
-                            {action.status !== 'COMPLETED' && (
-                              <select
-                                aria-label={`Update ${action.title} status`}
-                                value={action.status}
-                                onChange={(event) =>
-                                  updateAction(
-                                    action,
-                                    event.target.value as ActionStatus,
-                                  )
-                                }
-                              >
-                                <option value="TODO">To do</option>
-                                <option value="IN_PROGRESS">In progress</option>
-                                <option value="COMPLETED">Completed</option>
-                              </select>
-                            )}
-                          </div>
-                          {editingAction === action.id && action.status !== 'COMPLETED' && <form className="measurement-form" onSubmit={(event) => void saveActionEdit(event, action)}><Field label="Action" name="title" defaultValue={action.title} required /><label className="field"><span>Details</span><textarea name="description" defaultValue={action.description ?? ''} rows={2} /></label><Button>Save action</Button></form>}
-                          </div>
-                        ))
-                      ) : (
-                        <p className="empty-line">
-                          No actions yet. Add a small next step.
-                        </p>
-                      )}
-                    </div>
-                    <div className="detail-section">
-                      <div className="section-heading">
-                        <h3>Measurements</h3>
-                        <Button type="button" variant="quiet" onClick={() => setMeasurementFormOpen((open) => !open)}>
-                          {measurementFormOpen ? 'Cancel' : '+ Add'}
-                        </Button>
-                      </div>
-                      {measurementFormOpen && (
-                        <form className="measurement-form" onSubmit={(event) => void submitMeasurement(event)}>
-                          <Field label="What will you measure?" value={measurementLabel} onChange={(event) => setMeasurementLabel(event.target.value)} maxLength={120} required />
-                          <label className="field"><span>Value type</span><select value={measurementType} onChange={(event) => setMeasurementType(event.target.value as Measurement['valueType'])}><option value="NUMBER">Number</option><option value="TEXT">Text</option><option value="BOOLEAN">Yes / No</option></select></label>
-                          {measurementType === 'NUMBER' && <Field label="Unit (optional)" value={measurementUnit} onChange={(event) => setMeasurementUnit(event.target.value)} placeholder="e.g. hours, kg" />}
-                          {measurementType === 'BOOLEAN' ? <label className="field"><span>Target (optional)</span><select value={measurementTarget} onChange={(event) => setMeasurementTarget(event.target.value)}><option value="">No target</option><option value="true">Yes</option><option value="false">No</option></select></label> : <Field label="Target (optional)" type={measurementType === 'NUMBER' ? 'number' : 'text'} value={measurementTarget} onChange={(event) => setMeasurementTarget(event.target.value)} />}
-                          <Button disabled={busy || !measurementLabel.trim()}>Save measurement</Button>
-                        </form>
-                      )}
-                      {measurementLoadState === 'LOADING' ? <p className="empty-line">Loading measurements…</p> : measurementLoadState === 'ERROR' ? <div className="inline-error" role="alert">Measurements could not be loaded. <button type="button" className="text-link" onClick={() => setMeasurementRefresh((value) => value + 1)}>Try again</button></div> : measurements.length === 0 ? <p className="empty-line">No measurements yet.</p> : measurements.map((measurement) => {
-                        const history = measurementHistory[measurement.id] ?? [];
-                        const current = history[0];
-                        return (
-                          <article className="measurement-card" key={measurement.id}>
-                            <div className="measurement-card__heading">
-                              <div><strong>{measurement.label}</strong><small>{measurement.unit ?? measurement.valueType.toLowerCase()}{measurement.targetValue !== null ? ` · Target ${measurement.targetValue}${measurement.unit ? ` ${measurement.unit}` : ''}` : ' · No target'}</small></div>
-                              <button type="button" className="text-link" onClick={() => setEditingMeasurement(editingMeasurement === measurement.id ? null : measurement.id)}>{editingMeasurement === measurement.id ? 'Close' : 'Edit'}</button>
-                            </div>
-                            {editingMeasurement === measurement.id && (
-                              <form className="measurement-form" onSubmit={(event) => void submitMeasurementEdit(event, measurement)}>
-                                <Field label="Name" name="label" defaultValue={measurement.label} maxLength={120} required />
-                                {measurement.valueType === 'NUMBER' && <Field label="Unit" name="unit" defaultValue={measurement.unit ?? ''} />}
-                                {measurement.valueType === 'BOOLEAN' ? <label className="field"><span>Target</span><select name="targetValue" defaultValue={measurement.targetValue === null ? '' : String(measurement.targetValue)}><option value="">No target</option><option value="true">Yes</option><option value="false">No</option></select></label> : <Field label="Target" name="targetValue" type={measurement.valueType === 'NUMBER' ? 'number' : 'text'} defaultValue={measurement.targetValue === null ? '' : String(measurement.targetValue)} />}
-                                <Button>Save changes</Button>
-                              </form>
-                            )}
-                            <div className="measurement-card__current"><span>Latest recorded</span><strong>{current ? `${current.value}${measurement.unit ? ` ${measurement.unit}` : ''}` : 'No values yet'}</strong>{current && <small>{dateLabel(current.recordedAt)}</small>}</div>
-                            {history.length >= 2 && measurement.valueType === 'NUMBER' && (() => {
-                              const series = [...history].reverse().filter((record) => typeof record.value === 'number');
-                              if (series.length < 2) return null;
-                              const values = series.map((record) => record.value as number);
-                              const min = Math.min(...values); const max = Math.max(...values);
-                              const points = values.map((value, index) => `${(index / (values.length - 1)) * 100},${28 - (max === min ? 0.5 : (value - min) / (max - min)) * 22}`).join(' ');
-                              return <svg className="measurement-sparkline" viewBox="0 0 100 32" role="img" aria-label={`${measurement.label} history, ${series.length} recorded values`} preserveAspectRatio="none"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>;
-                            })()}
-                            {measurement.valueType === 'BOOLEAN' ? (
-                              <label className="field"><span>Record value</span><select value={measurementValues[measurement.id] ?? ''} onChange={(event) => setMeasurementValues((items) => ({ ...items, [measurement.id]: event.target.value }))}><option value="">Choose…</option><option value="true">Yes</option><option value="false">No</option></select></label>
-                            ) : (
-                              <Field label="Record value" type={measurement.valueType === 'NUMBER' ? 'number' : 'text'} value={measurementValues[measurement.id] ?? ''} onChange={(event) => setMeasurementValues((items) => ({ ...items, [measurement.id]: event.target.value }))} />
-                            )}
-                            <Button type="button" variant="secondary" disabled={!measurementValues[measurement.id]} onClick={() => void recordMeasurementValue(measurement)}>Record</Button>
-                            {history.length > 1 && <details className="measurement-history"><summary>History · {history.length}</summary><ol>{history.map((record) => <li key={record.id}><strong>{record.value}{measurement.unit ? ` ${measurement.unit}` : ''}</strong><time>{dateLabel(record.recordedAt)}</time></li>)}</ol></details>}
-                          </article>
-                        );
-                      })}
-                    </div>
-                    <div className="detail-section">
-                      <div className="section-heading"><h3>Review</h3><span>Saved evidence</span></div>
-                      <div className="review-evidence">
-                        <div><span>Actions complete</span><strong>{progress?.actionCompletion?.totalActions ? `${progress.actionCompletion.completedActions} of ${progress.actionCompletion.totalActions}` : progress ? 'No active Actions' : 'Loading'}</strong></div>
-                        <div><span>Measurements with values</span><strong>{measurements.filter((measurement) => (measurementHistory[measurement.id]?.length ?? 0) > 0).length} of {measurementLoadState === 'READY' ? measurements.length : '—'}</strong></div>
-                      </div>
-                      <small className="review-evidence__note">Goal outcome progress is not calculated until its rule is configured.</small>
-                    </div>
-                  </>
-                ) : (
-                  <EmptyState
-                    icon="◎"
-                    title="Choose a goal"
-                    body="Select a goal from the map to see its milestones, actions, and progress."
-                  />
-                )}
-              </section>
-            </div>
+            <GoalWorkspace
+              goals={displayedGoals}
+              hierarchy={visibleHierarchy}
+              selectedGoal={selectedGoal}
+              onSelectGoal={setSelectedGoal}
+              projects={projects}
+              selectedProject={selectedProject}
+              onSelectProject={(project) => {
+                setSelectedProject(project);
+                setSelectedGoal(null);
+              }}
+              milestones={milestones}
+              actions={actions}
+              workspaceActions={availableActions.filter((action) =>
+                displayedGoals.some((goal) => goal.id === action.goalId),
+              )}
+              progress={progress}
+              measurements={measurements}
+              measurementHistory={measurementHistory}
+              measurementLoadState={measurementLoadState}
+              onRefreshMeasurements={() => setMeasurementRefresh((value) => value + 1)}
+              measurementFormOpen={measurementFormOpen}
+              setMeasurementFormOpen={setMeasurementFormOpen}
+              measurementLabel={measurementLabel}
+              setMeasurementLabel={setMeasurementLabel}
+              measurementType={measurementType}
+              setMeasurementType={setMeasurementType}
+              measurementUnit={measurementUnit}
+              setMeasurementUnit={setMeasurementUnit}
+              measurementTarget={measurementTarget}
+              setMeasurementTarget={setMeasurementTarget}
+              measurementValues={measurementValues}
+              setMeasurementValues={setMeasurementValues}
+              onRecordMeasurement={recordMeasurementValue}
+              onSaveMeasurement={submitMeasurement}
+              editingMeasurement={editingMeasurement}
+              setEditingMeasurement={setEditingMeasurement}
+              onSaveMeasurementEdit={submitMeasurementEdit}
+              editingMilestone={editingMilestone}
+              setEditingMilestone={setEditingMilestone}
+              onSaveMilestone={saveMilestoneEdit}
+              onCompleteMilestone={completeMilestone}
+              editingAction={editingAction}
+              setEditingAction={setEditingAction}
+              onSaveAction={saveActionEdit}
+              onUpdateAction={updateAction}
+              onOpenExecution={openExecution}
+              onAddGoal={() => setModal('goal')}
+              onAddChildGoal={() => setModal('child')}
+              onAddMilestone={() => setModal('milestone')}
+              onAddAction={() => setModal('action')}
+              busy={busy}
+            />
           )}
 
           {page === 'planning' && (

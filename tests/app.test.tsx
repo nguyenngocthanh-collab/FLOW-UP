@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 async function openWorkspaceFromManager() {
-  await screen.findByRole('heading', { level: 1, name: 'Your workspaces' });
+  await screen.findByRole('heading', { name: 'Your workspaces', level: 1 });
   fireEvent.click(await screen.findByRole('button', { name: 'Open workspace' }));
   await screen.findByRole('heading', { name: 'Your space to grow' });
 }
@@ -54,7 +54,7 @@ describe('FLOW-UP application', () => {
     expect(fetch).toHaveBeenCalledWith('/api/workspaces/overview', expect.objectContaining({ headers: expect.objectContaining({ 'X-Workspace-Id': 'ws-new' }) }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Manage workspaces' }));
-    await screen.findByRole('heading', { level: 1, name: 'Your workspaces' });
+    await screen.findByRole('heading', { name: 'Your workspaces', level: 1 });
     fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
     await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/workspaces/ws-old', expect.objectContaining({ method: 'DELETE' })));
     expect(screen.queryByText('Old space')).not.toBeInTheDocument();
@@ -204,7 +204,7 @@ describe('FLOW-UP application', () => {
     await openWorkspaceFromManager();
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Goals/ }));
     fireEvent.click(await screen.findByRole('button', { name: /Build a running habit/ }));
-    fireEvent.click(await screen.findByRole('button', { name: '+ Add' }));
+    fireEvent.click(await screen.findByRole('button', { name: '+ Add measurement' }));
     fireEvent.change(screen.getByLabelText('What will you measure?'), { target: { value: 'Runs per week' } });
     fireEvent.change(screen.getByLabelText('Unit (optional)'), { target: { value: 'runs' } });
     fireEvent.change(screen.getByLabelText('Target (optional)'), { target: { value: '3' } });
@@ -279,14 +279,14 @@ describe('FLOW-UP application', () => {
     expect(await screen.findByText('Morning run')).toBeInTheDocument();
     expect(screen.getByText('Prepare running shoes')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Month' }));
-    expect(await screen.findByRole('heading', { name: /November 2026|tháng 11 năm 2026/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Open .*18/ }));
-    expect(await screen.findByRole('heading', { name: /18.*2026|2026.*18/ })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'tháng 11 năm 2026' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Thứ Tư, 18 tháng 11' }));
+    expect(await screen.findByRole('heading', { name: 'Thứ Tư, 18 tháng 11, 2026' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Day' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Edit time' }));
     fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-11-19' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save time' }));
-    await screen.findByText(/19.*2026|2026.*19/);
+    await screen.findByText('Thứ Năm, 19 tháng 11, 2026');
     expect(fetch).toHaveBeenCalledWith('/api/planning/schedules/schedule-1', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('"dailyPlanId":null') }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
@@ -319,8 +319,10 @@ describe('FLOW-UP application', () => {
       return { ok: true, status: 200, json: async () => ({ success: true, data }) };
     }));
     render(<App />);
-    await openWorkspaceFromManager();
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Goal discovery/ }));
+    // The app now opens on the Workspace Manager; enter the workspace before
+    // using workspace-scoped navigation such as Goal discovery.
+    fireEvent.click(await screen.findByRole('button', { name: 'Open workspace' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Goal discovery/ }));
     fireEvent.change(screen.getByLabelText('Your goal and any useful context'), { target: { value: 'I want to learn Spanish.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Understand my goal' }));
     expect(await screen.findByRole('heading', { name: 'Learn conversational Spanish' })).toBeInTheDocument();

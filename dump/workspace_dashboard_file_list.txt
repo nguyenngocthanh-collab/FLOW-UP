@@ -1,7 +1,0 @@
-﻿src/app/App.tsx
-src/app/DashboardHome.tsx
-src/app/dashboard-home.css
-src/app/workspace-manager.css
-src/styles.css
-src/lib/api.ts
-tests/app.test.tsx

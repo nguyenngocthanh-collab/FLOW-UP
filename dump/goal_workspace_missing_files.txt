@@ -1,0 +1,13 @@
+﻿src/goals/GoalWorkspace.tsx
+src/goals/GoalTreeView.tsx
+src/goals/GoalKanbanView.tsx
+src/goals/GoalListView.tsx
+src/goals/GoalTimelineView.tsx
+src/goals/GoalProgressView.tsx
+src/goals/GoalDetailPanel.tsx
+src/goals/goal-workspace.css
+src/goals/goal-tree.css
+src/goals/goal-kanban.css
+src/goals/goal-list.css
+src/goals/goal-timeline.css
+backend/src/api/routes/review.routes.ts
