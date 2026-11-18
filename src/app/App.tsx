@@ -1,3 +1,4 @@
+import { DashboardHome } from './DashboardHome';
 import {
   useCallback,
   useEffect,
@@ -288,6 +289,7 @@ function Sidebar({
   onLogout,
   mobileOpen,
   closeMobile,
+  onManageWorkspaces,
 }: {
   page: Page;
   setPage: (page: Page) => void;
@@ -296,9 +298,9 @@ function Sidebar({
   onLogout: () => void;
   mobileOpen: boolean;
   closeMobile: () => void;
+  onManageWorkspaces: () => void;
 }) {
   const items: { id: Page; label: string; icon: string }[] = [
-    { id: 'workspaces', label: 'Workspaces', icon: '⌂' },
     { id: 'assistant', label: 'Goal discovery', icon: 'AI' },
     { id: 'home', label: 'Overview', icon: '◫' },
     { id: 'projects', label: 'Projects', icon: '▦' },
@@ -313,14 +315,23 @@ function Sidebar({
           <span className="brand__mark">f</span>
           <span>flow-up</span>
         </div>
-        <div className="workspace-switch">
+        <button
+          type="button"
+          className="workspace-switch"
+          aria-label="Manage workspaces"
+          title="Back to workspace manager"
+          onClick={() => {
+            onManageWorkspaces();
+            closeMobile();
+          }}
+        >
           <span className="workspace-switch__icon">⌂</span>
           <span>
-            <small>WORKSPACE</small>
+            <small>WORKSPACE · MANAGE</small>
             <strong>{workspace?.name ?? 'Your workspace'}</strong>
           </span>
           <span className="workspace-switch__chevron">⌄</span>
-        </div>
+        </button>
         <nav className="nav-list" aria-label="Main navigation">
           <span className="nav-label">MENU</span>
           {items.map((item) => (
@@ -684,6 +695,8 @@ export function App() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceSearch, setWorkspaceSearch] = useState('');
+  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [baseDataLoaded, setBaseDataLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -725,7 +738,7 @@ export function App() {
   >(null);
   const [executionAction, setExecutionAction] = useState<Action | null>(null);
   const [executionData, setExecutionData] = useState<Execution | null>(null);
-  const [planningDate, setPlanningDate] = useState(today());
+  const [planningDate] = useState(today());
 
   const notify = useCallback((next: Notice) => {
     setNotice(next);
@@ -947,6 +960,9 @@ export function App() {
   const nextAction = availableActions.find((action) => action.status === 'IN_PROGRESS')
     ?? availableActions.find((action) => action.status === 'TODO');
   const nextSchedule = upcomingSchedules[0];
+  const filteredWorkspaces = workspaces.filter((item) =>
+    item.name.toLocaleLowerCase().includes(workspaceSearch.trim().toLocaleLowerCase()),
+  );
 
   async function authenticated(userContext: UserContext) {
     setUser(userContext);
@@ -971,6 +987,7 @@ export function App() {
     try {
       const created = await api.createWorkspace(name);
       setWorkspaceName('');
+      setShowCreateWorkspace(false);
       const updated = await refreshWorkspaces();
       setWorkspaces(updated);
       notify({ kind: 'success', text: `${created.name} created.` });
@@ -1336,16 +1353,19 @@ export function App() {
             : page === 'review' ? 'See what happened, what you measured, and what remains unknown.' : 'Make time for the work that matters.';
 
   return (
-    <div className="app-layout">
-      <Sidebar
-        page={page}
-        setPage={setPage}
-        user={user}
-        workspace={workspace}
-        onLogout={logout}
-        mobileOpen={mobileOpen}
-        closeMobile={() => setMobileOpen(false)}
-      />
+    <div className={`app-layout ${page === 'workspaces' ? 'app-layout--workspace-manager' : 'app-layout--workspace-dashboard'}`}>
+      {page !== 'workspaces' && (
+        <Sidebar
+          page={page}
+          setPage={setPage}
+          user={user}
+          workspace={workspace}
+          onLogout={logout}
+          mobileOpen={mobileOpen}
+          closeMobile={() => setMobileOpen(false)}
+          onManageWorkspaces={() => setPage('workspaces')}
+        />
+      )}
       <main className="main-area">
         <header className="topbar">
           <button
@@ -1365,6 +1385,11 @@ export function App() {
             </strong>
           </div>
           <div className="topbar__right">
+            {page === 'workspaces' && (
+              <Button type="button" variant="quiet" onClick={() => void logout()}>
+                Sign out
+              </Button>
+            )}
             <span className="topbar-date">
               {new Date().toLocaleDateString(undefined, {
                 weekday: 'short',
@@ -1423,32 +1448,124 @@ export function App() {
 
           {page === 'workspaces' && (
             <section className="workspace-manager" aria-label="Workspace manager">
-              <form className="workspace-manager__create" onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}>
+              {showCreateWorkspace && (
+                <Modal
+                  title="Create a workspace"
+                  onClose={() => {
+                    if (workspaceBusy) return;
+                    setShowCreateWorkspace(false);
+                    setWorkspaceName('');
+                  }}
+                >
+                  <form
+                    className="form-stack"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void createWorkspace();
+                    }}
+                  >
+                    <p className="muted">
+                      Keep personal goals, a team initiative, or a side project in its own space.
+                    </p>
+                    <Field
+                      label="Workspace name"
+                      value={workspaceName}
+                      maxLength={80}
+                      placeholder="For example, Personal goals"
+                      autoFocus
+                      onChange={(event) => setWorkspaceName(event.target.value)}
+                    />
+                    <div className="heading-actions">
+                      <Button
+                        type="submit"
+                        disabled={workspaceBusy || !workspaceName.trim()}
+                      >
+                        {workspaceBusy ? 'Creating…' : 'Create workspace'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={workspaceBusy}
+                        onClick={() => {
+                          setShowCreateWorkspace(false);
+                          setWorkspaceName('');
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                </Modal>
+              )}
+
+              <div className="workspace-manager__heading">
                 <div>
-                  <h2>Create a workspace</h2>
-                  <p>Keep personal goals, a team initiative, or a side project in its own space.</p>
+                  <h2>Your workspaces</h2>
+                  <span>
+                    {workspaces.length}{' '}
+                    {workspaces.length === 1 ? 'workspace' : 'workspaces'}
+                  </span>
                 </div>
-                <div className="workspace-manager__form">
-                  <Field label="Workspace name" value={workspaceName} maxLength={80} placeholder="For example, Personal goals" onChange={(event) => setWorkspaceName(event.target.value)} />
-                  <Button type="submit" disabled={workspaceBusy || !workspaceName.trim()}>{workspaceBusy ? 'Working…' : 'Create workspace'}</Button>
-                </div>
-              </form>
-              <div className="workspace-manager__heading"><h2>Your spaces</h2><span>{workspaces.length} {workspaces.length === 1 ? 'workspace' : 'workspaces'}</span></div>
-              {workspaces.length ? (
+                {workspaces.length > 0 && (
+                  <Field
+                    label="Search workspaces"
+                    type="search"
+                    value={workspaceSearch}
+                    placeholder="Find a workspace..."
+                    onChange={(event) => setWorkspaceSearch(event.target.value)}
+                  />
+                )}
+              </div>
+
+              {filteredWorkspaces.length ? (
                 <div className="workspace-manager__grid">
-                  {workspaces.map((item) => (
+                  {filteredWorkspaces.map((item) => (
                     <article className="workspace-manager__item" key={item.id}>
                       <span className="workspace-manager__mark">⌂</span>
-                      <div className="workspace-manager__details"><h3>{item.name}</h3><p>Created {dateLabel(item.createdAt.slice(0, 10))}{workspace?.id === item.id ? ' · currently open' : ''}</p></div>
+                      <div className="workspace-manager__details">
+                        <h3>{item.name}</h3>
+                        <p>
+                          Created {dateLabel(item.createdAt.slice(0, 10))}
+                          {workspace?.id === item.id ? ' · currently open' : ''}
+                        </p>
+                      </div>
                       <div className="workspace-manager__actions">
-                        <Button variant={workspace?.id === item.id ? 'secondary' : 'primary'} disabled={workspaceBusy} onClick={() => void openWorkspace(item)}>{workspace?.id === item.id ? 'Open again' : 'Open workspace'}</Button>
-                        <Button variant="danger" disabled={workspaceBusy} onClick={() => void deleteWorkspace(item)}>Delete</Button>
+                        <Button
+                          variant="primary"
+                          disabled={workspaceBusy}
+                          onClick={() => void openWorkspace(item)}
+                        >
+                          Open workspace
+                        </Button>
+                        <Button
+                          variant="danger"
+                          disabled={workspaceBusy}
+                          onClick={() => void deleteWorkspace(item)}
+                        >
+                          Delete
+                        </Button>
                       </div>
                     </article>
                   ))}
                 </div>
+              ) : workspaces.length > 0 ? (
+                <div className="workspace-manager__empty workspace-manager__empty--compact">
+                  <span>⌕</span>
+                  <h3>No matching workspaces</h3>
+                  <p>Try a different name or clear your search.</p>
+                  <Button type="button" variant="secondary" onClick={() => setWorkspaceSearch('')}>
+                    Clear search
+                  </Button>
+                </div>
               ) : (
-                <div className="workspace-manager__empty"><span>⌂</span><h3>A clean start</h3><p>Create a workspace when you are ready. Your goals and projects will live inside it.</p></div>
+                <div className="workspace-manager__empty">
+                  <span>⌂</span>
+                  <h3>A clean start</h3>
+                  <p>Create a workspace when you are ready. Your goals and projects will live inside it.</p>
+                  <Button type="button" onClick={() => setShowCreateWorkspace(true)}>
+                    Create your first workspace
+                  </Button>
+                </div>
               )}
             </section>
           )}
@@ -1467,188 +1584,50 @@ export function App() {
           {page === 'review' && <GoalReviewPage goals={goals} initialGoalId={selectedGoal?.id ?? null} />}
 
           {page === 'home' && (
-            <>
-              <section className="hero-card">
-                <div className="hero-card__content">
-                  <span className="hero-card__tag">
-                    A FRESH START, EVERY DAY
-                  </span>
-                  <h2>
-                    Turn your intention
-                    <br />
-                    into <em>something real.</em>
-                  </h2>
-                  <p>Choose one meaningful thing to move forward today.</p>
-                  <Button variant="secondary" onClick={() => setPage('goals')}>
-                    Explore your goals <span>→</span>
-                  </Button>
-                </div>
-                <div className="hero-illustration" aria-hidden="true">
-                  <div className="hero-illustration__sun" />
-                  <div className="hero-illustration__hill hero-illustration__hill--back" />
-                  <div className="hero-illustration__hill hero-illustration__hill--front" />
-                  <span>✳</span>
-                </div>
-              </section>
-              <div className="home-next-grid">
-                <section className="panel home-next-card">
-                  <span className="eyebrow">CONTINUE AN ACTION</span>
-                  {actionsLoadError ? <div><strong>Actions unavailable</strong><button type="button" className="text-link" onClick={() => setActionRefresh((value) => value + 1)}>Try again</button></div> : !actionsLoaded ? <p className="empty-line">Loading actions…</p> : nextAction ? <button type="button" className="home-next-card__link" onClick={() => void openExecution(nextAction)}><strong>{nextAction.title}</strong><small>{goals.find((goal) => goal.id === nextAction.goalId)?.title ?? 'Goal'} · {nextAction.status === 'IN_PROGRESS' ? 'In progress' : 'To do'}</small></button> : <div><strong>No open Actions</strong><button type="button" className="text-link" onClick={() => setPage('goals')}>View Goals</button></div>}
-                </section>
-                <section className="panel home-next-card">
-                  <span className="eyebrow">UPCOMING WORK</span>
-                  {schedulesLoadError ? <div><strong>Schedule unavailable</strong><button type="button" className="text-link" onClick={() => setScheduleRefresh((value) => value + 1)}>Try again</button></div> : !schedulesLoaded ? <p className="empty-line">Loading schedule…</p> : nextSchedule ? <button type="button" className="home-next-card__link" onClick={() => { setPlanningDate(nextSchedule.startAt.slice(0, 10)); setPage('planning'); }}><strong>{availableActions.find((action) => action.id === nextSchedule.actionId)?.title ?? 'Scheduled Action'}</strong><small>{new Date(nextSchedule.startAt).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</small></button> : <div><strong>Nothing scheduled this week</strong><button type="button" className="text-link" onClick={() => setPage('planning')}>Open Planning</button></div>}
-                </section>
-              </div>
-              <div className="section-title">
-                <div>
-                  <h2>Your overview</h2>
-                  <p>Here’s where your energy is going.</p>
-                </div>
-                <button
-                  className="text-link"
-                  onClick={() => setPage('projects')}
-                >
-                  View projects <span>→</span>
-                </button>
-              </div>
-              <div className="stat-grid">
-                <article className="stat-card">
-                  <span className="stat-card__icon stat-card__icon--peach">
-                    ▦
-                  </span>
-                  <span className="stat-card__label">PROJECTS</span>
-                  <strong>{baseDataLoaded ? projects.length : '—'}</strong>
-                  <small>in your workspace</small>
-                </article>
-                <article className="stat-card">
-                  <span className="stat-card__icon stat-card__icon--sage">
-                    ◎
-                  </span>
-                  <span className="stat-card__label">YOUR GOALS</span>
-                  <strong>{baseDataLoaded ? goals.length : '—'}</strong>
-                  <small>ideas in motion</small>
-                </article>
-                <article className="stat-card">
-                  <span className="stat-card__icon stat-card__icon--blue">
-                    ↗
-                  </span>
-                  <span className="stat-card__label">COMPLETED ACTIONS</span>
-                  <strong>{actionsLoaded ? availableActions.filter((action) => action.status === 'COMPLETED').length : '—'}</strong>
-                  <small>keep showing up</small>
-                </article>
-              </div>
-              <div className="home-columns">
-                <section className="panel">
-                  <div className="panel__heading">
-                    <div>
-                      <h2>Projects</h2>
-                    </div>
-                    <button
-                      className="icon-button"
-                      aria-label="View projects"
-                      onClick={() => setPage('projects')}
-                    >
-                      ↗
-                    </button>
-                  </div>
-                  {projects.length ? (
-                    <div className="project-list">
-                      {projects.slice(0, 4).map((project, index) => (
-                        <button
-                          key={project.id}
-                          className="project-row"
-                          onClick={() => {
-                            setSelectedProject(project);
-                            setPage('goals');
-                          }}
-                        >
-                          <span
-                            className={`project-avatar project-avatar--${index % 3}`}
-                          >
-                            {project.name.slice(0, 1).toUpperCase()}
-                          </span>
-                          <span className="project-row__body">
-                            <strong>{project.name}</strong>
-                            <small>{project.description || 'Project'}</small>
-                          </span>
-                          <span className="project-row__arrow">→</span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <EmptyState
-                      icon="▦"
-                      title="No projects yet"
-                      body="Create a project to give your goals a home."
-                      action={
-                        <Button
-                          variant="secondary"
-                          onClick={() => setModal('project')}
-                        >
-                          Create a project
-                        </Button>
-                      }
-                    />
-                  )}
-                </section>
-                <section className="panel focus-panel">
-                  <div className="panel__heading">
-                    <div>
-                      <h2>Your Goals</h2>
-                    </div>
-                    <button
-                      className="icon-button"
-                      aria-label="View goals"
-                      onClick={() => setPage('goals')}
-                    >
-                      ↗
-                    </button>
-                  </div>
-                  {goals.length ? (
-                    goals.slice(0, 4).map((goal) => (
-                      <button
-                        key={goal.id}
-                        className="focus-row"
-                        onClick={() => {
-                          setSelectedGoal(goal);
-                          setPage('goals');
-                        }}
-                      >
-                        <span className="focus-row__dot" />
-                        <span>
-                          <strong>{goal.title}</strong>
-                          <small>
-                            {goal.targetDate
-                              ? `Target ${dateLabel(goal.targetDate)}`
-                              : 'No target date'}
-                          </small>
-                        </span>
-                        <span>→</span>
-                      </button>
-                    ))
-                  ) : (
-                    <EmptyState
-                      icon="◎"
-                      title="Make space for a goal"
-                      body="A clear goal gives your daily actions direction."
-                      action={
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            setPage('goals');
-                            setModal('goal');
-                          }}
-                        >
-                          Create a goal
-                        </Button>
-                      }
-                    />
-                  )}
-                </section>
-              </div>
-            </>
-          )}
+  <DashboardHome
+    email={user.email}
+    goals={goals}
+    projects={projects}
+    actions={availableActions}
+    nextAction={nextAction}
+    nextSchedule={nextSchedule}
+    baseDataLoaded={baseDataLoaded}
+    actionsLoaded={actionsLoaded}
+    actionsLoadError={actionsLoadError}
+    schedulesLoaded={schedulesLoaded}
+    schedulesLoadError={schedulesLoadError}
+    onNewGoal={() => {
+      setSelectedProject(null);
+      setSelectedGoal(null);
+      setPage('goals');
+      setModal('goal');
+    }}
+    onNewProject={() => setModal('project')}
+    onOpenGoal={(goal) => {
+      setSelectedProject(
+        projects.find((project) => project.id === goal.projectId) ?? null,
+      );
+      setSelectedGoal(goal);
+      setPage('goals');
+    }}
+    onOpenProject={(project) => {
+      setSelectedProject(project);
+      setSelectedGoal(null);
+      setPage('goals');
+    }}
+    onOpenExecution={(action) => {
+      void openExecution(action);
+    }}
+    onOpenPlanning={() => setPage('planning')}
+    onRetryActions={() => setActionRefresh((value) => value + 1)}
+    onRetrySchedules={() => setScheduleRefresh((value) => value + 1)}
+    onViewGoals={() => {
+      setSelectedProject(null);
+      setPage('goals');
+    }}
+    onViewProjects={() => setPage('projects')}
+  />
+)}
 
           {page === 'projects' && (
             <section className="project-grid">

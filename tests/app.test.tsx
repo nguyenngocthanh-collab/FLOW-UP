@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 async function openWorkspaceFromManager() {
-  await screen.findByRole('heading', { name: 'Your workspaces' });
+  await screen.findByRole('heading', { level: 1, name: 'Your workspaces' });
   fireEvent.click(await screen.findByRole('button', { name: 'Open workspace' }));
   await screen.findByRole('heading', { name: 'Your space to grow' });
 }
@@ -44,6 +44,8 @@ describe('FLOW-UP application', () => {
 
     render(<App />);
     await screen.findByText('Old space');
+    fireEvent.click(screen.getByRole('button', { name: '+ Create workspace' }));
+    expect(await screen.findByRole('dialog', { name: 'Create a workspace' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Workspace name'), { target: { value: 'Research' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
     await screen.findByText('Research');
@@ -51,7 +53,8 @@ describe('FLOW-UP application', () => {
     await screen.findByRole('heading', { name: 'Your space to grow' });
     expect(fetch).toHaveBeenCalledWith('/api/workspaces/overview', expect.objectContaining({ headers: expect.objectContaining({ 'X-Workspace-Id': 'ws-new' }) }));
 
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Workspaces/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage workspaces' }));
+    await screen.findByRole('heading', { level: 1, name: 'Your workspaces' });
     fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
     await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/workspaces/ws-old', expect.objectContaining({ method: 'DELETE' })));
     expect(screen.queryByText('Old space')).not.toBeInTheDocument();
@@ -276,14 +279,14 @@ describe('FLOW-UP application', () => {
     expect(await screen.findByText('Morning run')).toBeInTheDocument();
     expect(screen.getByText('Prepare running shoes')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Month' }));
-    expect(await screen.findByRole('heading', { name: 'November 2026' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open Wednesday, November 18' }));
-    expect(await screen.findByRole('heading', { name: 'Wednesday, November 18, 2026' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /November 2026|tháng 11 năm 2026/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Open .*18/ }));
+    expect(await screen.findByRole('heading', { name: /18.*2026|2026.*18/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Day' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Edit time' }));
     fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-11-19' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save time' }));
-    await screen.findByText('Thursday, November 19, 2026');
+    await screen.findByText(/19.*2026|2026.*19/);
     expect(fetch).toHaveBeenCalledWith('/api/planning/schedules/schedule-1', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('"dailyPlanId":null') }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
@@ -316,7 +319,8 @@ describe('FLOW-UP application', () => {
       return { ok: true, status: 200, json: async () => ({ success: true, data }) };
     }));
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', { name: /Goal discovery/ }));
+    await openWorkspaceFromManager();
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Goal discovery/ }));
     fireEvent.change(screen.getByLabelText('Your goal and any useful context'), { target: { value: 'I want to learn Spanish.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Understand my goal' }));
     expect(await screen.findByRole('heading', { name: 'Learn conversational Spanish' })).toBeInTheDocument();

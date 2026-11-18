@@ -1,0 +1,3052 @@
+
+============================================================
+FILE: backend\src\api\http.ts
+============================================================
+import type { IncomingMessage, ServerResponse } from "node:http";
+
+export function sendJson(
+  res: ServerResponse,
+  statusCode: number,
+  data: unknown,
+  corsOrigin = "*"
+): void {
+  if (res.writableEnded) return;
+
+  const jsonString = JSON.stringify(data);
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(jsonString),
+    "Access-Control-Allow-Origin": corsOrigin,
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Workspace-Id",
+    "Access-Control-Max-Age": "86400"
+  });
+  res.end(jsonString);
+}
+
+export function sendSuccess<T>(
+  res: ServerResponse,
+  data: T,
+  statusCode = 200,
+  corsOrigin = "*"
+): void {
+  sendJson(res, statusCode, { success: true, data }, corsOrigin);
+}
+
+export function sendError(
+  res: ServerResponse,
+  statusCode: number,
+  code: string,
+  message: string,
+  corsOrigin = "*"
+): void {
+  sendJson(res, statusCode, { success: false, error: { code, message } }, corsOrigin);
+}
+
+export function getStatusCodeForError(code: string): number {
+  if (code.includes("RATE_LIMITED")) return 429;
+  if (
+    code.includes("INVALID_CREDENTIALS") ||
+    code.includes("EMAIL_NOT_CONFIRMED") ||
+    code.includes("UNAUTHENTICATED")
+  ) return 401;
+  if (code.includes("PROVIDER_ERROR") || code.includes("NETWORK_ERROR")) return 502;
+  if (code.includes("NOT_FOUND")) return 404;
+  if (code.includes("ACCESS_DENIED") || code.includes("OWNERSHIP")) return 403;
+  if (code.includes("ALREADY_EXISTS") || code.includes("CIRCULAR") || code.includes("CONFLICT")) return 409;
+  if (code.includes("INVALID") || code.includes("INPUT") || code.includes("REQUIRED")) return 400;
+  return 400;
+}
+
+export async function parseJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.setEncoding("utf-8");
+
+    req.on("data", (chunk: string) => {
+      raw += chunk;
+      if (raw.length > 1024 * 1024) {
+        // 1MB limit
+        reject(new Error("Request payload too large"));
+      }
+    });
+
+    req.on("end", () => {
+      if (!raw.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        resolve(parsed);
+      } catch {
+        reject(new Error("Invalid JSON body"));
+      }
+    });
+
+    req.on("error", (err) => {
+      reject(err);
+    });
+  });
+}
+
+export function extractBearerToken(req: IncomingMessage): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return null;
+
+  const parts = authHeader.trim().split(/\s+/);
+  if (parts.length === 2 && parts[0].toLowerCase() === "bearer") {
+    return parts[1];
+  }
+  return null;
+}
+
+============================================================
+FILE: backend\src\api\index.ts
+============================================================
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ApplicationContainer } from "../application/container.ts";
+import { Router } from "./router.ts";
+import { extractBearerToken, parseJsonBody, sendError } from "./http.ts";
+import type { RequestContext } from "./types.ts";
+import { registerHealthRoutes } from "./routes/health.routes.ts";
+import { registerAuthRoutes } from "./routes/auth.routes.ts";
+import { registerWorkspaceRoutes } from "./routes/workspace.routes.ts";
+import { registerProjectRoutes } from "./routes/project.routes.ts";
+import { registerGoalRoutes } from "./routes/goal.routes.ts";
+import { registerMilestoneRoutes } from "./routes/milestone.routes.ts";
+import { registerActionRoutes } from "./routes/action.routes.ts";
+import { registerPlanningRoutes } from "./routes/planning.routes.ts";
+import { registerProgressRoutes } from "./routes/progress.routes.ts";
+import { registerAIRoutes } from "./routes/ai.routes.ts";
+import { registerMeasurementRoutes } from "./routes/measurement.routes.ts";
+
+export * from "./types.ts";
+export * from "./http.ts";
+export * from "./router.ts";
+
+export function createRouter(): Router {
+  const router = new Router();
+
+  registerHealthRoutes(router);
+  registerAuthRoutes(router);
+  registerWorkspaceRoutes(router);
+  registerProjectRoutes(router);
+  registerGoalRoutes(router);
+  registerMilestoneRoutes(router);
+  registerActionRoutes(router);
+  registerPlanningRoutes(router);
+  registerProgressRoutes(router);
+  registerAIRoutes(router);
+  registerMeasurementRoutes(router);
+
+  return router;
+}
+
+export function createApiHandler(
+  container: ApplicationContainer,
+  corsOrigin = "*"
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const router = createRouter();
+
+  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    // 1. Handle CORS preflight
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": corsOrigin,
+        "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Workspace-Id",
+        "Access-Control-Max-Age": "86400"
+      });
+      res.end();
+      return;
+    }
+
+    try {
+      const parsedUrl = new URL(req.url ?? "/", "http://localhost");
+      const pathname = parsedUrl.pathname;
+      const query = parsedUrl.searchParams;
+      const method = req.method ?? "GET";
+
+      const match = router.match(method, pathname);
+      if (!match) {
+        sendError(
+          res,
+          404,
+          "ROUTE_NOT_FOUND",
+          `Route not found: ${method} ${pathname}`,
+          corsOrigin
+        );
+        return;
+      }
+
+      // 2. Authentication check
+      let user: import("../modules/auth/auth.types.ts").AuthenticatedUserContext | null = null;
+      const token = extractBearerToken(req);
+      if (token) {
+        user = await container.tokenVerifier.verifyToken(token);
+        const selectedWorkspaceId = req.headers["x-workspace-id"];
+        if (user && typeof selectedWorkspaceId === "string" && selectedWorkspaceId.trim()) {
+          user = { ...user, workspaceId: selectedWorkspaceId.trim() };
+        }
+      }
+
+      if (match.requiresAuth && !user) {
+        sendError(
+          res,
+          401,
+          "UNAUTHORIZED",
+          "Authentication required. Please provide a valid Bearer token.",
+          corsOrigin
+        );
+        return;
+      }
+
+      // 3. Body parsing for POST / PATCH / PUT
+      let body: unknown = null;
+      if (["POST", "PATCH", "PUT"].includes(method)) {
+        try {
+          body = await parseJsonBody(req);
+        } catch (err: unknown) {
+          sendError(
+            res,
+            400,
+            "INVALID_JSON_BODY",
+            (err as Error)?.message || "Malformed JSON body.",
+            corsOrigin
+          );
+          return;
+        }
+      }
+
+      // 4. Request context
+      const ctx: RequestContext = {
+        req,
+        res,
+        container,
+        user,
+        params: match.params,
+        query,
+        body,
+        corsOrigin
+      };
+
+      // 5. Execute handler
+      await match.handler(ctx);
+    } catch (err: unknown) {
+      console.error("[API Error]", err);
+      if (!res.writableEnded) {
+        sendError(
+          res,
+          500,
+          "INTERNAL_SERVER_ERROR",
+          "An unexpected server error occurred.",
+          corsOrigin
+        );
+      }
+    }
+  };
+}
+
+============================================================
+FILE: backend\src\api\router.ts
+============================================================
+import type { HttpMethod, RouteHandler, RouteMatch } from "./types.ts";
+
+interface RouteRegistration {
+  method: HttpMethod;
+  pattern: RegExp;
+  paramNames: string[];
+  handler: RouteHandler;
+  requiresAuth: boolean;
+}
+
+export class Router {
+  private readonly routes: RouteRegistration[] = [];
+
+  register(
+    method: HttpMethod,
+    pathPattern: string,
+    handler: RouteHandler,
+    options: { requiresAuth?: boolean } = {}
+  ): void {
+    const paramNames: string[] = [];
+    const regexPattern = pathPattern
+      .replace(/\/+$/, "") // remove trailing slash
+      .replace(/:([a-zA-Z0-9_]+)/g, (_, paramName) => {
+        paramNames.push(paramName);
+        return "([^/]+)";
+      });
+
+    const pattern = new RegExp(`^${regexPattern || "/"}$`);
+    this.routes.push({
+      method,
+      pattern,
+      paramNames,
+      handler,
+      requiresAuth: options.requiresAuth ?? true
+    });
+  }
+
+  get(path: string, handler: RouteHandler, options?: { requiresAuth?: boolean }): void {
+    this.register("GET", path, handler, options);
+  }
+
+  post(path: string, handler: RouteHandler, options?: { requiresAuth?: boolean }): void {
+    this.register("POST", path, handler, options);
+  }
+
+  patch(path: string, handler: RouteHandler, options?: { requiresAuth?: boolean }): void {
+    this.register("PATCH", path, handler, options);
+  }
+
+  delete(path: string, handler: RouteHandler, options?: { requiresAuth?: boolean }): void {
+    this.register("DELETE", path, handler, options);
+  }
+
+  match(method: string, pathname: string): RouteMatch | null {
+    const cleanPath = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+
+    for (const route of this.routes) {
+      if (route.method !== method) continue;
+
+      const match = route.pattern.exec(cleanPath);
+      if (match) {
+        const params: Record<string, string> = {};
+        for (let i = 0; i < route.paramNames.length; i++) {
+          params[route.paramNames[i]] = decodeURIComponent(match[i + 1]);
+        }
+        return {
+          handler: route.handler,
+          params,
+          requiresAuth: route.requiresAuth
+        };
+      }
+    }
+
+    return null;
+  }
+}
+
+============================================================
+FILE: backend\src\api\types.ts
+============================================================
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AuthenticatedUserContext } from "../modules/auth/auth.types.ts";
+import type { ApplicationContainer } from "../application/container.ts";
+
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD";
+
+export interface RequestContext {
+  req: IncomingMessage;
+  res: ServerResponse;
+  container: ApplicationContainer;
+  user: AuthenticatedUserContext | null;
+  params: Record<string, string>;
+  query: URLSearchParams;
+  body: unknown;
+  corsOrigin: string;
+}
+
+export type RouteHandler = (ctx: RequestContext) => Promise<void> | void;
+
+export interface RouteMatch {
+  handler: RouteHandler;
+  params: Record<string, string>;
+  requiresAuth: boolean;
+}
+
+============================================================
+FILE: backend\src\api\routes\action.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
+import type {
+  ActionStatus,
+  CreateActionInput,
+  RecordExecutionInput,
+  UpdateActionInput
+} from "../../modules/action/action.types.ts";
+
+export function registerActionRoutes(router: Router): void {
+  router.post(
+    "/api/actions",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as CreateActionInput;
+      const result = await ctx.container.actionService.createAction(ctx.user!, body);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 201, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/goals/:goalId/actions",
+    async (ctx) => {
+      const result = await ctx.container.actionService.listActionsByGoal(
+        ctx.user!,
+        ctx.params.goalId
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/actions",
+    async (ctx) => {
+      const milestoneId = ctx.query.get("milestoneId");
+      const goalId = ctx.query.get("goalId");
+
+      if (milestoneId) {
+        const result = await ctx.container.actionService.listActionsByMilestone(
+          ctx.user!,
+          milestoneId
+        );
+        if (!result.success) {
+          const status = getStatusCodeForError(result.error.code);
+          sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+          return;
+        }
+        sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+        return;
+      }
+
+      if (goalId) {
+        const result = await ctx.container.actionService.listActionsByGoal(
+          ctx.user!,
+          goalId
+        );
+        if (!result.success) {
+          const status = getStatusCodeForError(result.error.code);
+          sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+          return;
+        }
+        sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+        return;
+      }
+
+      sendError(
+        ctx.res,
+        400,
+        "ACTION_INVALID_INPUT",
+        "Either goalId or milestoneId query parameter is required.",
+        ctx.corsOrigin
+      );
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/actions/:id",
+    async (ctx) => {
+      const result = await ctx.container.actionService.getAction(ctx.user!, ctx.params.id);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.patch(
+    "/api/actions/:id",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as UpdateActionInput;
+      const result = await ctx.container.actionService.updateAction(
+        ctx.user!,
+        ctx.params.id,
+        body
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.patch(
+    "/api/actions/:id/status",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as { status?: ActionStatus };
+      if (!body.status) {
+        sendError(
+          ctx.res,
+          400,
+          "ACTION_INVALID_STATUS",
+          "status field is required.",
+          ctx.corsOrigin
+        );
+        return;
+      }
+      const result = await ctx.container.actionService.updateActionStatus(
+        ctx.user!,
+        ctx.params.id,
+        body.status
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/actions/:id/complete",
+    async (ctx) => {
+      const result = await ctx.container.actionService.completeAction(
+        ctx.user!,
+        ctx.params.id
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/actions/:id/execution",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as RecordExecutionInput;
+      const result = await ctx.container.actionService.recordExecution(
+        ctx.user!,
+        ctx.params.id,
+        body
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/actions/:id/execution",
+    async (ctx) => {
+      const result = await ctx.container.actionService.getExecutionData(
+        ctx.user!,
+        ctx.params.id
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+}
+
+============================================================
+FILE: backend\src\api\routes\ai.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import { sendError, sendSuccess } from "../http.ts";
+import type { RouteHandler } from "../types.ts";
+import type { AIOperationType, AIProposalSelection } from "../../modules/ai-orchestration/index.ts";
+import { AIOrchestrationError } from "../../modules/ai-orchestration/index.ts";
+
+function aiStatus(code: string): number {
+  if (code === "AI_UNAUTHENTICATED") return 401;
+  if (code === "AI_ACCESS_DENIED" || code === "AI_PROPOSAL_ACCESS_DENIED") return 403;
+  if (code === "AI_PROPOSAL_NOT_FOUND") return 404;
+  if (code === "AI_USAGE_LIMIT_EXCEEDED" || code === "AI_PROVIDER_RATE_LIMITED") return 429;
+  if (code === "AI_PROVIDER_UNAVAILABLE") return 503;
+  if (code.startsWith("AI_INVALID") || code === "AI_APPROVAL_REQUIRED" || code === "AI_OUTPUT_INVALID") return 400;
+  if (code.startsWith("AI_PROVIDER") || code === "AI_REQUEST_TIMEOUT") return 502;
+  return 409;
+}
+
+function bodyObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
+
+export function registerAIRoutes(router: Router): void {
+  const run = (operation: AIOperationType): RouteHandler => async (ctx) => {
+    const body = bodyObject(ctx.body);
+    if (typeof body?.input !== "string" || !body.input.trim()) {
+      sendError(ctx.res, 400, "AI_INVALID_REQUEST", "A goal description is required.", ctx.corsOrigin);
+      return;
+    }
+    try {
+      const result = await ctx.container.aiService.execute(ctx.user!, operation, body.input);
+      sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+    } catch (error) {
+      const failure = error instanceof AIOrchestrationError
+        ? error : new AIOrchestrationError("AI_PROVIDER_ERROR", "AI assistance is temporarily unavailable.", error);
+      sendError(ctx.res, aiStatus(failure.code), failure.code, failure.message, ctx.corsOrigin);
+    }
+  };
+
+  router.post("/api/ai/goal-understanding", run("GOAL_CLARIFICATION"));
+  router.post("/api/ai/feasibility", run("GOAL_FEASIBILITY"));
+  router.post("/api/ai/goal-proposals", run("GOAL_TREE_PROPOSAL"));
+
+  router.get("/api/ai/proposals/:id", async (ctx) => {
+    try {
+      sendSuccess(ctx.res, await ctx.container.aiService.getProposal(ctx.user!, ctx.params.id), 200, ctx.corsOrigin);
+    } catch (error) {
+      const failure = error instanceof AIOrchestrationError ? error : new AIOrchestrationError("AI_PERSISTENCE_ERROR", "Unable to load proposal.");
+      sendError(ctx.res, aiStatus(failure.code), failure.code, failure.message, ctx.corsOrigin);
+    }
+  });
+
+  router.patch("/api/ai/proposals/:id", async (ctx) => {
+    const body = bodyObject(ctx.body);
+    if (!body || !("proposalData" in body)) {
+      sendError(ctx.res, 400, "AI_INVALID_REQUEST", "proposalData is required.", ctx.corsOrigin);
+      return;
+    }
+    try {
+      sendSuccess(ctx.res, await ctx.container.aiService.updateProposal(ctx.user!, ctx.params.id, body.proposalData), 200, ctx.corsOrigin);
+    } catch (error) {
+      const failure = error instanceof AIOrchestrationError ? error : new AIOrchestrationError("AI_PERSISTENCE_ERROR", "Unable to update proposal.");
+      sendError(ctx.res, aiStatus(failure.code), failure.code, failure.message, ctx.corsOrigin);
+    }
+  });
+
+  router.post("/api/ai/proposals/:id/reject", async (ctx) => {
+    try {
+      sendSuccess(ctx.res, await ctx.container.aiService.rejectProposal(ctx.user!, ctx.params.id), 200, ctx.corsOrigin);
+    } catch (error) {
+      const failure = error instanceof AIOrchestrationError ? error : new AIOrchestrationError("AI_PERSISTENCE_ERROR", "Unable to reject proposal.");
+      sendError(ctx.res, aiStatus(failure.code), failure.code, failure.message, ctx.corsOrigin);
+    }
+  });
+
+  router.post("/api/ai/proposals/:id/apply", async (ctx) => {
+    const body = bodyObject(ctx.body) as { selection?: AIProposalSelection } | null;
+    if (!body?.selection || !Array.isArray(body.selection.selectedItemIds)) {
+      sendError(ctx.res, 400, "AI_APPROVAL_REQUIRED", "Select proposal items before approving.", ctx.corsOrigin);
+      return;
+    }
+    try {
+      sendSuccess(ctx.res, await ctx.container.aiService.approveAndApplyProposal(ctx.user!, ctx.params.id, body.selection), 200, ctx.corsOrigin);
+    } catch (error) {
+      const failure = error instanceof AIOrchestrationError ? error : new AIOrchestrationError("AI_PROPOSAL_APPLICATION_FAILED", "Unable to apply proposal.");
+      sendError(ctx.res, aiStatus(failure.code), failure.code, failure.message, ctx.corsOrigin);
+    }
+  });
+}
+
+============================================================
+FILE: backend\src\api\routes\auth.routes.ts
+============================================================
+
+import type { Router } from "../router.ts";
+import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
+
+export function registerAuthRoutes(router: Router): void {
+  router.post(
+    "/api/auth/register",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as {
+        email?: string;
+        password?: string;
+      };
+
+      if (
+        typeof body.email !== "string" ||
+        typeof body.password !== "string" ||
+        !body.email.trim() ||
+        !body.password.trim()
+      ) {
+        sendError(
+          ctx.res,
+          400,
+          "AUTH_INVALID_INPUT",
+          "Email and password are required.",
+          ctx.corsOrigin
+        );
+        return;
+      }
+
+      const result = await ctx.container.authApiService.register({
+        email: body.email,
+        password: body.password
+      });
+
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+
+        sendError(
+          ctx.res,
+          status,
+          result.error.code,
+          result.error.message,
+          ctx.corsOrigin
+        );
+        return;
+      }
+
+      sendSuccess(
+        ctx.res,
+        {
+          ...result.data.registration,
+          token: result.data.accessToken
+        },
+        201,
+        ctx.corsOrigin
+      );
+    },
+    { requiresAuth: false }
+  );
+
+  router.post(
+    "/api/auth/login",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as {
+        email?: string;
+        password?: string;
+      };
+
+      if (
+        typeof body.email !== "string" ||
+        typeof body.password !== "string" ||
+        !body.email.trim() ||
+        !body.password.trim()
+      ) {
+        sendError(
+          ctx.res,
+          400,
+          "AUTH_INVALID_INPUT",
+          "Email and password are required.",
+          ctx.corsOrigin
+        );
+        return;
+      }
+
+      const result = await ctx.container.authApiService.signIn({
+        email: body.email,
+        password: body.password
+      });
+
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+
+        sendError(
+          ctx.res,
+          status,
+          result.error.code,
+          result.error.message,
+          ctx.corsOrigin
+        );
+        return;
+      }
+
+      if (!result.data.accessToken) {
+        sendError(
+          ctx.res,
+          500,
+          "AUTH_PROVIDER_ERROR",
+          "Authentication provider did not return an access token.",
+          ctx.corsOrigin
+        );
+        return;
+      }
+
+      sendSuccess(
+        ctx.res,
+        {
+          user: result.data.user,
+          token: result.data.accessToken
+        },
+        200,
+        ctx.corsOrigin
+      );
+    },
+    { requiresAuth: false }
+  );
+
+  router.post(
+    "/api/auth/logout",
+    async (ctx) => {
+      const result = await ctx.container.authService.signOut();
+
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+
+        sendError(
+          ctx.res,
+          status,
+          result.error.code,
+          result.error.message,
+          ctx.corsOrigin
+        );
+        return;
+      }
+
+      sendSuccess(
+        ctx.res,
+        {
+          message: "Signed out successfully."
+        },
+        200,
+        ctx.corsOrigin
+      );
+    },
+    { requiresAuth: false }
+  );
+
+  router.get(
+    "/api/auth/session",
+    async (ctx) => {
+      if (!ctx.user) {
+        sendError(
+          ctx.res,
+          401,
+          "AUTH_UNAUTHENTICATED",
+          "Authentication required.",
+          ctx.corsOrigin
+        );
+        return;
+      }
+
+      sendSuccess(
+        ctx.res,
+        {
+          user: ctx.user
+        },
+        200,
+        ctx.corsOrigin
+      );
+    },
+    { requiresAuth: true }
+  );
+}
+
+============================================================
+FILE: backend\src\api\routes\goal.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
+import type {
+  CreateGoalInput,
+  GoalScope,
+  ListGoalsFilter,
+  UpdateGoalInput
+} from "../../modules/goal/goal.types.ts";
+
+export function registerGoalRoutes(router: Router): void {
+  router.post(
+    "/api/goals",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as CreateGoalInput;
+      const result = await ctx.container.goalService.createGoal(ctx.user!, body);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 201, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/goals/hierarchy",
+    async (ctx) => {
+      const scope: GoalScope = {};
+      const projectId = ctx.query.get("projectId");
+      const rootGoalId = ctx.query.get("rootGoalId");
+      const includeArchived = ctx.query.get("includeArchived");
+
+      if (projectId) scope.projectId = projectId;
+      if (rootGoalId) scope.rootGoalId = rootGoalId;
+      if (includeArchived === "true") scope.includeArchived = true;
+
+      const result = await ctx.container.goalService.getGoalHierarchy(ctx.user!, scope);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/goals",
+    async (ctx) => {
+      const filter: ListGoalsFilter = {};
+      const projectId = ctx.query.get("projectId");
+      const parentGoalId = ctx.query.get("parentGoalId");
+      const statusParam = ctx.query.get("status");
+      const includeArchived = ctx.query.get("includeArchived");
+
+      if (projectId !== null) filter.projectId = projectId;
+      if (parentGoalId !== null) filter.parentGoalId = parentGoalId === "null" ? null : parentGoalId;
+      if (statusParam) filter.status = statusParam;
+      if (includeArchived === "true") filter.includeArchived = true;
+
+      const result = await ctx.container.goalService.listGoals(ctx.user!, filter);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/goals/:id",
+    async (ctx) => {
+      const result = await ctx.container.goalService.getGoal(ctx.user!, ctx.params.id);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.patch(
+    "/api/goals/:id",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as UpdateGoalInput;
+      const result = await ctx.container.goalService.updateGoal(
+        ctx.user!,
+        ctx.params.id,
+        body
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/goals/:id/children",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as Omit<CreateGoalInput, "projectId" | "parentGoalId">;
+      const result = await ctx.container.goalService.addChildGoal(
+        ctx.user!,
+        ctx.params.id,
+        body
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 201, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+}
+
+============================================================
+FILE: backend\src\api\routes\health.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import { sendSuccess } from "../http.ts";
+
+export function registerHealthRoutes(router: Router): void {
+  router.get(
+    "/health",
+    (ctx) => {
+      sendSuccess(
+        ctx.res,
+        {
+          status: "ok",
+          timestamp: new Date().toISOString()
+        },
+        200,
+        ctx.corsOrigin
+      );
+    },
+    { requiresAuth: false }
+  );
+
+  router.get(
+    "/api/health",
+    (ctx) => {
+      sendSuccess(
+        ctx.res,
+        {
+          status: "ok",
+          timestamp: new Date().toISOString()
+        },
+        200,
+        ctx.corsOrigin
+      );
+    },
+    { requiresAuth: false }
+  );
+}
+
+============================================================
+FILE: backend\src\api\routes\measurement.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import type { RequestContext } from "../types.ts";
+import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
+import { MeasurementError } from "../../modules/measurement/index.ts";
+import type { CreateMeasurementInput, MeasurementHistoryQuery, RecordMeasurementValueInput, UpdateMeasurementInput } from "../../modules/measurement/measurement.types.ts";
+
+function query(ctx: RequestContext): MeasurementHistoryQuery {
+  const offset = ctx.query.get("offset");
+  const limit = ctx.query.get("limit");
+  return {
+    ...(ctx.query.has("from") ? { from: ctx.query.get("from")! } : {}),
+    ...(ctx.query.has("to") ? { to: ctx.query.get("to")! } : {}),
+    ...(offset !== null ? { offset: Number(offset) } : {}),
+    ...(limit !== null ? { limit: Number(limit) } : {}),
+  };
+}
+
+export function registerMeasurementRoutes(router: Router): void {
+  router.get("/api/goals/:goalId/measurements", async (ctx) => {
+    try {
+      const result = await ctx.container.measurementService.listMeasurementsByGoal(ctx.user!, ctx.params.goalId);
+      sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+    } catch (error) { sendFailure(ctx, error); }
+  }, { requiresAuth: true });
+
+  router.post("/api/measurements", async (ctx) => {
+    try {
+      const result = await ctx.container.measurementService.createMeasurement(ctx.user!, (ctx.body ?? {}) as CreateMeasurementInput);
+      sendSuccess(ctx.res, result, 201, ctx.corsOrigin);
+    } catch (error) { sendFailure(ctx, error); }
+  }, { requiresAuth: true });
+
+  router.get("/api/measurements/:id", async (ctx) => {
+    try {
+      sendSuccess(ctx.res, await ctx.container.measurementService.getMeasurement(ctx.user!, ctx.params.id), 200, ctx.corsOrigin);
+    } catch (error) { sendFailure(ctx, error); }
+  }, { requiresAuth: true });
+
+  router.patch("/api/measurements/:id", async (ctx) => {
+    try {
+      sendSuccess(ctx.res, await ctx.container.measurementService.updateMeasurement(ctx.user!, ctx.params.id, (ctx.body ?? {}) as UpdateMeasurementInput), 200, ctx.corsOrigin);
+    } catch (error) { sendFailure(ctx, error); }
+  }, { requiresAuth: true });
+
+  router.delete("/api/measurements/:id", async (ctx) => {
+    try {
+      sendSuccess(ctx.res, await ctx.container.measurementService.archiveMeasurement(ctx.user!, ctx.params.id), 200, ctx.corsOrigin);
+    } catch (error) { sendFailure(ctx, error); }
+  }, { requiresAuth: true });
+
+  router.post("/api/measurements/:id/records", async (ctx) => {
+    try {
+      const body = (ctx.body ?? {}) as Omit<RecordMeasurementValueInput, "measurementId">;
+      sendSuccess(ctx.res, await ctx.container.measurementService.recordMeasurementValue(ctx.user!, { ...body, measurementId: ctx.params.id }), 201, ctx.corsOrigin);
+    } catch (error) { sendFailure(ctx, error); }
+  }, { requiresAuth: true });
+
+  router.get("/api/measurements/:id/current", async (ctx) => {
+    try {
+      sendSuccess(ctx.res, await ctx.container.measurementService.getCurrentMeasurementValue(ctx.user!, ctx.params.id), 200, ctx.corsOrigin);
+    } catch (error) { sendFailure(ctx, error); }
+  }, { requiresAuth: true });
+
+  router.get("/api/measurements/:id/history", async (ctx) => {
+    try {
+      sendSuccess(ctx.res, await ctx.container.measurementService.getMeasurementHistory(ctx.user!, ctx.params.id, query(ctx)), 200, ctx.corsOrigin);
+    } catch (error) { sendFailure(ctx, error); }
+  }, { requiresAuth: true });
+}
+
+function sendFailure(ctx: RequestContext, error: unknown): void {
+  if (error instanceof MeasurementError) {
+    sendError(ctx.res, getStatusCodeForError(error.code), error.code, error.message, ctx.corsOrigin);
+    return;
+  }
+  sendError(ctx.res, 400, "MEASUREMENT_ERROR", "Measurement request could not be completed.", ctx.corsOrigin);
+}
+
+============================================================
+FILE: backend\src\api\routes\milestone.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
+import type {
+  CreateMilestoneInput,
+  UpdateMilestoneInput
+} from "../../modules/milestone/milestone.types.ts";
+
+export function registerMilestoneRoutes(router: Router): void {
+  router.post(
+    "/api/milestones",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as CreateMilestoneInput;
+      const result = await ctx.container.milestoneService.createMilestone(ctx.user!, body);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 201, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/goals/:goalId/milestones",
+    async (ctx) => {
+      const result = await ctx.container.milestoneService.listMilestonesByGoal(
+        ctx.user!,
+        ctx.params.goalId
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/milestones",
+    async (ctx) => {
+      const goalId = ctx.query.get("goalId");
+      if (!goalId) {
+        sendError(
+          ctx.res,
+          400,
+          "MILESTONE_INVALID_INPUT",
+          "goalId query parameter is required.",
+          ctx.corsOrigin
+        );
+        return;
+      }
+      const result = await ctx.container.milestoneService.listMilestonesByGoal(
+        ctx.user!,
+        goalId
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/milestones/:id",
+    async (ctx) => {
+      const result = await ctx.container.milestoneService.getMilestone(
+        ctx.user!,
+        ctx.params.id
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.patch(
+    "/api/milestones/:id",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as UpdateMilestoneInput;
+      const result = await ctx.container.milestoneService.updateMilestone(
+        ctx.user!,
+        ctx.params.id,
+        body
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/milestones/:id/complete",
+    async (ctx) => {
+      const result = await ctx.container.milestoneService.completeMilestone(
+        ctx.user!,
+        ctx.params.id
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+}
+
+============================================================
+FILE: backend\src\api\routes\planning.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
+import { PlanningError } from "../../modules/planning/planning.errors.ts";
+import type {
+  ApprovedPlanningProposal,
+  CreateDailyPlanInput,
+  CreateScheduleInput,
+  UpdateDailyPlanInput,
+  UpdateScheduleInput
+} from "../../modules/planning/planning.types.ts";
+
+export function registerPlanningRoutes(router: Router): void {
+  router.post(
+    "/api/planning/daily-plans",
+    async (ctx) => {
+      try {
+        const body = (ctx.body ?? {}) as CreateDailyPlanInput;
+        const result = await ctx.container.planningService.createDailyPlan(ctx.user!, body);
+        sendSuccess(ctx.res, result, 201, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/planning/daily-plans/:date",
+    async (ctx) => {
+      try {
+        const result = await ctx.container.planningService.getDailyPlan(ctx.user!, ctx.params.date);
+        if (!result) {
+          sendError(
+            ctx.res,
+            404,
+            "DAILY_PLAN_NOT_FOUND",
+            `Daily Plan not found for date ${ctx.params.date}`,
+            ctx.corsOrigin
+          );
+          return;
+        }
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.patch(
+    "/api/planning/daily-plans/:id",
+    async (ctx) => {
+      try {
+        const body = (ctx.body ?? {}) as UpdateDailyPlanInput;
+        const result = await ctx.container.planningService.updateDailyPlan(
+          ctx.user!,
+          ctx.params.id,
+          body
+        );
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/planning/daily-plans/:id/actions",
+    async (ctx) => {
+      try {
+        const body = (ctx.body ?? {}) as Omit<CreateScheduleInput, "dailyPlanId">;
+        const result = await ctx.container.planningService.addActionToDailyPlan(
+          ctx.user!,
+          ctx.params.id,
+          body
+        );
+        sendSuccess(ctx.res, result, 201, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.delete(
+    "/api/planning/daily-plans/:id/actions/:scheduleId",
+    async (ctx) => {
+      try {
+        const result = await ctx.container.planningService.removeActionFromDailyPlan(
+          ctx.user!,
+          ctx.params.id,
+          ctx.params.scheduleId
+        );
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/planning/schedules",
+    async (ctx) => {
+      try {
+        const body = (ctx.body ?? {}) as CreateScheduleInput;
+        const result = await ctx.container.planningService.createSchedule(ctx.user!, body);
+        sendSuccess(ctx.res, result, 201, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/planning/schedules",
+    async (ctx) => {
+      try {
+        const startDate = ctx.query.get("startDate");
+        const endDate = ctx.query.get("endDate");
+        if (!startDate || !endDate) {
+          sendError(
+            ctx.res,
+            400,
+            "PLANNING_INVALID_INPUT",
+            "startDate and endDate query parameters are required.",
+            ctx.corsOrigin
+          );
+          return;
+        }
+
+        const result = await ctx.container.planningService.getSchedulesByDateRange(
+          ctx.user!,
+          { startDate, endDate }
+        );
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/planning/schedules/:id",
+    async (ctx) => {
+      try {
+        const result = await ctx.container.planningService.getSchedule(ctx.user!, ctx.params.id);
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.patch(
+    "/api/planning/schedules/:id",
+    async (ctx) => {
+      try {
+        const body = (ctx.body ?? {}) as UpdateScheduleInput;
+        const result = await ctx.container.planningService.updateSchedule(
+          ctx.user!,
+          ctx.params.id,
+          body
+        );
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.delete(
+    "/api/planning/schedules/:id",
+    async (ctx) => {
+      try {
+        await ctx.container.planningService.deleteSchedule(ctx.user!, ctx.params.id);
+        sendSuccess(ctx.res, { deleted: true }, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/planning/proposals/apply",
+    async (ctx) => {
+      try {
+        const body = (ctx.body ?? {}) as ApprovedPlanningProposal;
+        const result = await ctx.container.planningService.applyApprovedPlanningProposal(
+          ctx.user!,
+          body
+        );
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof PlanningError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PLANNING_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+}
+
+============================================================
+FILE: backend\src\api\routes\progress.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
+import { ProgressError } from "../../modules/progress/progress.errors.ts";
+
+export function registerProgressRoutes(router: Router): void {
+  router.get(
+    "/api/progress/goals/:goalId",
+    async (ctx) => {
+      try {
+        const result = await ctx.container.progressService.getGoalProgressSummary(
+          ctx.user!,
+          ctx.params.goalId
+        );
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof ProgressError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PROGRESS_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/progress/summary",
+    async (ctx) => {
+      try {
+        const body = (ctx.body ?? {}) as { goalIds?: string[] };
+        if (!body.goalIds || !Array.isArray(body.goalIds)) {
+          sendError(
+            ctx.res,
+            400,
+            "PROGRESS_INVALID_INPUT",
+            "goalIds array is required.",
+            ctx.corsOrigin
+          );
+          return;
+        }
+
+        const result = await ctx.container.progressService.getProgressSummary(
+          ctx.user!,
+          body.goalIds
+        );
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof ProgressError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PROGRESS_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/progress/reviews/:goalId",
+    async (ctx) => {
+      try {
+        const result = await ctx.container.progressService.getProgressDataForReview(
+          ctx.user!,
+          ctx.params.goalId
+        );
+        sendSuccess(ctx.res, result, 200, ctx.corsOrigin);
+      } catch (err: unknown) {
+        if (err instanceof ProgressError) {
+          const status = getStatusCodeForError(err.code);
+          sendError(ctx.res, status, err.code, err.message, ctx.corsOrigin);
+          return;
+        }
+        sendError(ctx.res, 400, "PROGRESS_ERROR", String((err as Error)?.message), ctx.corsOrigin);
+      }
+    },
+    { requiresAuth: true }
+  );
+}
+
+============================================================
+FILE: backend\src\api\routes\project.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
+import type { CreateProjectInput, UpdateProjectInput } from "../../modules/workspace/workspace.types.ts";
+
+export function registerProjectRoutes(router: Router): void {
+  router.post(
+    "/api/projects",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as CreateProjectInput;
+      const result = await ctx.container.workspaceService.createProject(ctx.user!, body);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 201, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/projects",
+    async (ctx) => {
+      const result = await ctx.container.workspaceService.listProjects(ctx.user!);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/projects/:id",
+    async (ctx) => {
+      const result = await ctx.container.workspaceService.getProject(ctx.user!, ctx.params.id);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.patch(
+    "/api/projects/:id",
+    async (ctx) => {
+      const body = (ctx.body ?? {}) as UpdateProjectInput;
+      const result = await ctx.container.workspaceService.updateProject(
+        ctx.user!,
+        ctx.params.id,
+        body
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/projects/:id/overview",
+    async (ctx) => {
+      const result = await ctx.container.workspaceService.getProjectOverview(
+        ctx.user!,
+        ctx.params.id
+      );
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+}
+
+============================================================
+FILE: backend\src\api\routes\workspace.routes.ts
+============================================================
+import type { Router } from "../router.ts";
+import { getStatusCodeForError, sendError, sendSuccess } from "../http.ts";
+
+export function registerWorkspaceRoutes(router: Router): void {
+  router.get(
+    "/api/workspaces",
+    async (ctx) => {
+      const result = await ctx.container.workspaceService.listWorkspaces(ctx.user!);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/workspaces",
+    async (ctx) => {
+      const name = (ctx.body as { name?: unknown } | null)?.name;
+      const result = await ctx.container.workspaceService.createWorkspace(ctx.user!, typeof name === "string" ? name : "");
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 201, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.delete(
+    "/api/workspaces/:id",
+    async (ctx) => {
+      const result = await ctx.container.workspaceService.deleteWorkspace(ctx.user!, ctx.params.id);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, { deleted: result.data }, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.post(
+    "/api/workspaces/initialize",
+    async (ctx) => {
+      const result = await ctx.container.workspaceService.initializePersonalWorkspace(ctx.user!);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 201, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/workspaces/current",
+    async (ctx) => {
+      const result = await ctx.container.workspaceService.getCurrentWorkspace(ctx.user!);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+
+  router.get(
+    "/api/workspaces/overview",
+    async (ctx) => {
+      const result = await ctx.container.workspaceService.getWorkspaceOverview(ctx.user!);
+      if (!result.success) {
+        const status = getStatusCodeForError(result.error.code);
+        sendError(ctx.res, status, result.error.code, result.error.message, ctx.corsOrigin);
+        return;
+      }
+      sendSuccess(ctx.res, result.data, 200, ctx.corsOrigin);
+    },
+    { requiresAuth: true }
+  );
+}
+
+============================================================
+FILE: backend\src\infrastructure\auth\index.ts
+============================================================
+
+import type { AuthProvider } from "../../modules/auth/auth.provider.ts";
+import { createSupabaseAuthProvider } from "../../modules/auth/supabase.provider.ts";
+import { createLocalDevAuthProvider } from "./local-dev.provider.ts";
+
+export * from "./token-verifier.ts";
+export * from "./local-dev.provider.ts";
+
+export interface AuthConfig {
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
+  devMode?: boolean;
+}
+
+export function createAuthProvider(
+  config: AuthConfig
+): AuthProvider {
+  const hasSupabaseConfig =
+    Boolean(config.supabaseUrl?.trim()) &&
+    Boolean(config.supabaseAnonKey?.trim());
+
+  // Explicit local development mode without Supabase configuration.
+  if (config.devMode === true && !hasSupabaseConfig) {
+    return createLocalDevAuthProvider();
+  }
+
+  // Supabase is required when local development mode is disabled.
+  if (!hasSupabaseConfig) {
+    throw new Error(
+      "Supabase Auth configuration is required. " +
+      "Set SUPABASE_URL and SUPABASE_ANON_KEY, " +
+      "or explicitly enable AUTH_DEV_MODE=true for local development."
+    );
+  }
+
+  try {
+    return createSupabaseAuthProvider(
+      config.supabaseUrl!,
+      config.supabaseAnonKey!
+    );
+  } catch {
+    throw new Error(
+      "Failed to initialize Supabase Auth provider."
+    );
+  }
+}
+
+============================================================
+FILE: backend\src\infrastructure\auth\local-dev.provider.ts
+============================================================
+
+import {
+  randomUUID,
+  randomBytes,
+  scrypt,
+  timingSafeEqual
+} from "node:crypto";
+
+import type {
+  AuthProvider,
+  ProviderAuthEvent,
+  ProviderResult,
+  ProviderSession,
+  ProviderUser
+} from "../../modules/auth/auth.provider.ts";
+
+interface StoredDevUser {
+  id: string;
+  email: string;
+  passwordHash: string;
+}
+
+const PASSWORD_KEY_LENGTH = 64;
+
+function derivePasswordHash(
+  password: string,
+  salt: string
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, PASSWORD_KEY_LENGTH, (error, derivedKey) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(derivedKey as Buffer);
+    });
+  });
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16).toString("hex");
+  const hash = await derivePasswordHash(password, salt);
+
+  return `${salt}:${hash.toString("hex")}`;
+}
+
+async function verifyPassword(
+  password: string,
+  storedHash: string
+): Promise<boolean> {
+  const [salt, originalHash] = storedHash.split(":");
+
+  if (!salt || !originalHash || !/^[a-f0-9]+$/i.test(originalHash)) {
+    return false;
+  }
+
+  const originalBuffer = Buffer.from(originalHash, "hex");
+
+  if (originalBuffer.length !== PASSWORD_KEY_LENGTH) {
+    return false;
+  }
+
+  const derivedHash = await derivePasswordHash(password, salt);
+
+  return timingSafeEqual(originalBuffer, derivedHash);
+}
+
+export class LocalDevAuthProvider implements AuthProvider {
+  private readonly users = new Map<string, StoredDevUser>();
+
+  private currentSession: ProviderSession | null = null;
+
+  private readonly listeners = new Set<
+    (
+      event: ProviderAuthEvent,
+      session: ProviderSession | null
+    ) => void
+  >();
+
+  async register(
+    email: string,
+    password: string
+  ): Promise<
+    ProviderResult<{
+      user: ProviderUser | null;
+      session: ProviderSession | null;
+    }>
+  > {
+    const normalizedEmail = email.toLowerCase().trim();
+
+    for (const user of this.users.values()) {
+      if (user.email === normalizedEmail) {
+        return {
+          data: { user: null, session: null },
+          error: new Error("User already exists")
+        };
+      }
+    }
+
+    const id = `dev-user-${randomUUID()}`;
+    const passwordHash = await hashPassword(password);
+
+    const storedUser: StoredDevUser = {
+      id,
+      email: normalizedEmail,
+      passwordHash
+    };
+
+    this.users.set(id, storedUser);
+
+    const providerUser: ProviderUser = {
+      id,
+      email: normalizedEmail
+    };
+
+    const session: ProviderSession = {
+      user: providerUser,
+      accessToken: `dev-token:${id}:${normalizedEmail}`
+    };
+
+    this.currentSession = session;
+    this.notify("SIGNED_IN", session);
+
+    return {
+      data: { user: providerUser, session },
+      error: null
+    };
+  }
+
+  async signIn(
+    email: string,
+    password: string
+  ): Promise<
+    ProviderResult<{
+      user: ProviderUser | null;
+      session: ProviderSession | null;
+    }>
+  > {
+    const normalizedEmail = email.toLowerCase().trim();
+
+    let found: StoredDevUser | null = null;
+
+    for (const user of this.users.values()) {
+      if (user.email === normalizedEmail) {
+        found = user;
+        break;
+      }
+    }
+
+    if (!found || !(await verifyPassword(password, found.passwordHash))) {
+      return {
+        data: { user: null, session: null },
+        error: new Error("Invalid credentials")
+      };
+    }
+
+    const providerUser: ProviderUser = {
+      id: found.id,
+      email: found.email
+    };
+
+    const session: ProviderSession = {
+      user: providerUser,
+      accessToken: `dev-token:${found.id}:${found.email}`
+    };
+
+    this.currentSession = session;
+    this.notify("SIGNED_IN", session);
+
+    return {
+      data: { user: providerUser, session },
+      error: null
+    };
+  }
+
+  async signOut(): Promise<ProviderResult<null>> {
+    this.currentSession = null;
+    this.notify("SIGNED_OUT", null);
+
+    return {
+      data: null,
+      error: null
+    };
+  }
+
+  async getSession(): Promise<
+    ProviderResult<{ session: ProviderSession | null }>
+  > {
+    return {
+      data: { session: this.currentSession },
+      error: null
+    };
+  }
+
+  onAuthStateChange(
+    callback: (
+      event: ProviderAuthEvent,
+      session: ProviderSession | null
+    ) => void
+  ): () => void {
+    this.listeners.add(callback);
+
+    return () => {
+      this.listeners.delete(callback);
+    };
+  }
+
+  private notify(
+    event: ProviderAuthEvent,
+    session: ProviderSession | null
+  ): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event, session);
+      } catch {
+        // Ignore callback errors.
+      }
+    }
+  }
+}
+
+export function createLocalDevAuthProvider(): AuthProvider {
+  return new LocalDevAuthProvider();
+}
+
+============================================================
+FILE: backend\src\infrastructure\auth\token-verifier.ts
+============================================================
+
+import type { AuthenticatedUserContext } from "../../modules/auth/auth.types.ts";
+
+export interface TokenVerifier {
+  verifyToken(token: string): Promise<AuthenticatedUserContext | null>;
+}
+
+export interface TokenVerifierOptions {
+  supabaseUrl?: string;
+  supabaseKey?: string;
+  devMode?: boolean;
+}
+
+export class SupabaseOrDevTokenVerifier implements TokenVerifier {
+  private readonly options: TokenVerifierOptions;
+
+  constructor(options: TokenVerifierOptions) {
+    this.options = options;
+  }
+
+  async verifyToken(
+    token: string
+  ): Promise<AuthenticatedUserContext | null> {
+    const cleanToken = token.trim();
+
+    if (!cleanToken) return null;
+
+    const isDevToken =
+      cleanToken.startsWith("dev:") ||
+      cleanToken.startsWith("dev-token:") ||
+      cleanToken.startsWith("mock-token:");
+
+    // Development tokens are accepted only when explicitly enabled.
+    if (isDevToken) {
+      if (this.options.devMode !== true) return null;
+
+      return this.parseDevToken(cleanToken);
+    }
+
+    // Supabase access tokens must always be verified with Supabase,
+    // including when the application is running in development mode.
+    if (!this.options.supabaseUrl || !this.options.supabaseKey) {
+      return null;
+    }
+
+    try {
+      const response = await fetch(
+        `${this.options.supabaseUrl}/auth/v1/user`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${cleanToken}`,
+            apikey: this.options.supabaseKey
+          }
+        }
+      );
+
+      if (!response.ok) return null;
+
+      const data = (await response.json()) as {
+        id?: string;
+        email?: string;
+      };
+
+      if (!data?.id) return null;
+
+      return {
+        userId: data.id,
+        email: data.email ?? null,
+        isAuthenticated: true
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private parseDevToken(
+    token: string
+  ): AuthenticatedUserContext | null {
+    // Format: dev-token:<userId>:<email>
+    if (token.startsWith("dev-token:")) {
+      const parts = token.slice("dev-token:".length).split(":");
+      const userId = parts[0]?.trim();
+      const email = parts[1]?.trim();
+
+      if (!userId) return null;
+
+      return {
+        userId,
+        email: email || `${userId}@example.com`,
+        isAuthenticated: true
+      };
+    }
+
+    // Format: mock-token:<userId>
+    if (token.startsWith("mock-token:")) {
+      const userId = token.slice("mock-token:".length).trim();
+
+      if (!userId) return null;
+
+      return {
+        userId,
+        email: `${userId}@example.com`,
+        isAuthenticated: true
+      };
+    }
+
+    // Format: dev:<userId>
+    if (token.startsWith("dev:")) {
+      const userId = token.slice("dev:".length).trim();
+
+      if (!userId) return null;
+
+      return {
+        userId,
+        email: `${userId}@example.com`,
+        isAuthenticated: true
+      };
+    }
+
+    return null;
+  }
+}
+
+export function createTokenVerifier(
+  options: TokenVerifierOptions
+): TokenVerifier {
+  return new SupabaseOrDevTokenVerifier(options);
+}
+
+============================================================
+FILE: backend\src\modules\auth\auth.errors.ts
+============================================================
+import type { AuthError, AuthErrorCode } from "./auth.types";
+
+const ERROR_MESSAGES: Record<AuthErrorCode, string> = {
+  AUTH_INVALID_INPUT: "Email hoặc mật khẩu không hợp lệ.",
+  AUTH_INVALID_CREDENTIALS: "Email hoặc mật khẩu không chính xác.",
+  AUTH_EMAIL_ALREADY_EXISTS: "Email này đã được đăng ký.",
+  AUTH_EMAIL_NOT_CONFIRMED: "Email chưa được xác minh.",
+  AUTH_SESSION_EXPIRED: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
+  AUTH_RATE_LIMITED: "Có quá nhiều yêu cầu. Vui lòng thử lại sau.",
+  AUTH_NETWORK_ERROR: "Không thể kết nối mạng. Vui lòng thử lại.",
+  AUTH_PROVIDER_ERROR: "Dịch vụ xác thực đang gặp sự cố.",
+  AUTH_UNAUTHENTICATED: "Bạn cần đăng nhập để tiếp tục."
+};
+
+export function createAuthError(code: AuthErrorCode): AuthError {
+  return { code, message: ERROR_MESSAGES[code] };
+}
+
+export function normalizeProviderError(error: unknown): AuthError {
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message: unknown }).message).toLowerCase()
+      : "";
+
+  const status =
+    typeof error === "object" && error !== null && "status" in error
+      ? Number((error as { status: unknown }).status)
+      : 0;
+
+  if (
+    message.includes("already registered") ||
+    message.includes("user already exists") ||
+    message.includes("already been registered")
+  ) return createAuthError("AUTH_EMAIL_ALREADY_EXISTS");
+
+  if (
+    message.includes("invalid login credentials") ||
+    message.includes("invalid credentials")
+  ) return createAuthError("AUTH_INVALID_CREDENTIALS");
+
+  if (
+    message.includes("email not confirmed") ||
+    message.includes("email_not_confirmed")
+  ) return createAuthError("AUTH_EMAIL_NOT_CONFIRMED");
+
+  if (
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    status === 429
+  ) return createAuthError("AUTH_RATE_LIMITED");
+
+  if (
+    message.includes("network") ||
+    message.includes("fetch failed") ||
+    message.includes("failed to fetch")
+  ) return createAuthError("AUTH_NETWORK_ERROR");
+
+  if (status === 401) return createAuthError("AUTH_INVALID_CREDENTIALS");
+
+  return createAuthError("AUTH_PROVIDER_ERROR");
+}
+
+============================================================
+FILE: backend\src\modules\auth\auth.provider.ts
+============================================================
+
+export interface ProviderUser {
+  id: string;
+  email: string | null;
+}
+
+export interface ProviderSession {
+  user: ProviderUser;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+}
+
+export type ProviderAuthEvent =
+  | "INITIAL_SESSION"
+  | "SIGNED_IN"
+  | "SIGNED_OUT"
+  | "TOKEN_REFRESHED"
+  | "USER_UPDATED"
+  | "PASSWORD_RECOVERY"
+  | "MFA_CHALLENGE_VERIFIED";
+
+export interface ProviderResult<T> {
+  data: T;
+  error: unknown | null;
+}
+
+export interface AuthProvider {
+  register(
+    email: string,
+    password: string
+  ): Promise<
+    ProviderResult<{
+      user: ProviderUser | null;
+      session: ProviderSession | null;
+    }>
+  >;
+
+  signIn(
+    email: string,
+    password: string
+  ): Promise<
+    ProviderResult<{
+      user: ProviderUser | null;
+      session: ProviderSession | null;
+    }>
+  >;
+
+  signOut(): Promise<ProviderResult<null>>;
+
+  getSession(): Promise<
+    ProviderResult<{
+      session: ProviderSession | null;
+    }>
+  >;
+
+  onAuthStateChange(
+    callback: (
+      event: ProviderAuthEvent,
+      session: ProviderSession | null
+    ) => void
+  ): () => void;
+}
+
+============================================================
+FILE: backend\src\modules\auth\auth.service.ts
+============================================================
+
+import type { AuthProvider } from "./auth.provider";
+import { createAuthError, normalizeProviderError } from "./auth.errors";
+import type {
+  AuthenticationService,
+  AuthenticationState,
+  AuthenticatedUserContext,
+  OperationResult,
+  RegistrationResult,
+  RegisterInput,
+  SignInInput
+} from "./auth.types";
+import { validateRegisterInput, validateSignInInput } from "./auth.validation";
+
+export interface AuthenticationApiService {
+  register(
+    input: RegisterInput
+  ): Promise<
+    OperationResult<{
+      registration: RegistrationResult;
+      accessToken: string | null;
+    }>
+  >;
+
+  signIn(
+    input: SignInInput
+  ): Promise<
+    OperationResult<{
+      user: AuthenticatedUserContext;
+      accessToken: string | null;
+    }>
+  >;
+}
+
+function toUserContext(user: {
+  id: string;
+  email: string | null;
+}): AuthenticatedUserContext {
+  return {
+    userId: user.id,
+    email: user.email,
+    isAuthenticated: true
+  };
+}
+
+function success<T>(data: T): OperationResult<T> {
+  return { success: true, data };
+}
+
+function failure<T>(
+  code: Parameters<typeof createAuthError>[0]
+): OperationResult<T> {
+  return {
+    success: false,
+    error: createAuthError(code)
+  };
+}
+
+export function createAuthenticationService(
+  provider: AuthProvider
+): AuthenticationService {
+  return {
+    async register(
+      input: RegisterInput
+    ): Promise<OperationResult<RegistrationResult>> {
+      if (!validateRegisterInput(input).valid) {
+        return failure("AUTH_INVALID_INPUT");
+      }
+
+      try {
+        const result = await provider.register(
+          input.email.trim(),
+          input.password
+        );
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        if (result.data.session && result.data.user) {
+          return success({
+            status: "authenticated",
+            user: toUserContext(result.data.user)
+          });
+        }
+
+        return success({
+          status: "confirmation_required",
+          email: input.email.trim()
+        });
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    },
+
+    async signIn(
+      input: SignInInput
+    ): Promise<OperationResult<AuthenticatedUserContext>> {
+      if (!validateSignInInput(input).valid) {
+        return failure("AUTH_INVALID_INPUT");
+      }
+
+      try {
+        const result = await provider.signIn(
+          input.email.trim(),
+          input.password
+        );
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        if (!result.data.session || !result.data.user) {
+          return failure("AUTH_INVALID_CREDENTIALS");
+        }
+
+        return success(toUserContext(result.data.user));
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    },
+
+    async signOut(): Promise<OperationResult<void>> {
+      try {
+        const result = await provider.signOut();
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        return success(undefined);
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    },
+
+    async getAuthenticationState(): Promise<AuthenticationState> {
+      try {
+        const result = await provider.getSession();
+
+        if (result.error || !result.data.session) {
+          return {
+            status: "unauthenticated",
+            user: null
+          };
+        }
+
+        return {
+          status: "authenticated",
+          user: toUserContext(result.data.session.user)
+        };
+      } catch {
+        return {
+          status: "unauthenticated",
+          user: null
+        };
+      }
+    },
+
+    subscribeToAuthenticationState(listener) {
+      return provider.onAuthStateChange((_event, session) => {
+        if (session) {
+          listener({
+            status: "authenticated",
+            user: toUserContext(session.user)
+          });
+        } else {
+          listener({
+            status: "unauthenticated",
+            user: null
+          });
+        }
+      });
+    }
+  };
+}
+
+/**
+ * API-specific authentication service.
+ * Returns the access token supplied by the authentication provider.
+ * Does not change the B01 AuthenticationService contract.
+ */
+export function createAuthenticationApiService(
+  provider: AuthProvider
+): AuthenticationApiService {
+  return {
+    async register(input: RegisterInput) {
+      if (!validateRegisterInput(input).valid) {
+        return failure("AUTH_INVALID_INPUT");
+      }
+
+      try {
+        const result = await provider.register(
+          input.email.trim(),
+          input.password
+        );
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        if (result.data.session && result.data.user) {
+          return success({
+            registration: {
+              status: "authenticated",
+              user: toUserContext(result.data.user)
+            },
+            accessToken: result.data.session.accessToken ?? null
+          });
+        }
+
+        return success({
+          registration: {
+            status: "confirmation_required",
+            email: input.email.trim()
+          },
+          accessToken: null
+        });
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    },
+
+    async signIn(input: SignInInput) {
+      if (!validateSignInInput(input).valid) {
+        return failure("AUTH_INVALID_INPUT");
+      }
+
+      try {
+        const result = await provider.signIn(
+          input.email.trim(),
+          input.password
+        );
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        if (!result.data.session || !result.data.user) {
+          return failure("AUTH_INVALID_CREDENTIALS");
+        }
+
+        return success({
+          user: toUserContext(result.data.user),
+          accessToken: result.data.session.accessToken ?? null
+        });
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    }
+  };
+}
+
+============================================================
+FILE: backend\src\modules\auth\auth.types.ts
+============================================================
+export interface RegisterInput {
+  email: string;
+  password: string;
+}
+
+export interface SignInInput {
+  email: string;
+  password: string;
+}
+
+export interface AuthenticatedUserContext {
+  userId: string;
+  email: string | null;
+  isAuthenticated: true;
+  /** Selected by the client; every use must still verify workspace ownership. */
+  workspaceId?: string;
+}
+
+export type AuthenticationState =
+  | { status: "loading"; user: null }
+  | { status: "unauthenticated"; user: null }
+  | { status: "authenticated"; user: AuthenticatedUserContext };
+
+export type RegistrationResult =
+  | { status: "confirmation_required"; email: string }
+  | { status: "authenticated"; user: AuthenticatedUserContext };
+
+export type AuthErrorCode =
+  | "AUTH_INVALID_INPUT"
+  | "AUTH_INVALID_CREDENTIALS"
+  | "AUTH_EMAIL_ALREADY_EXISTS"
+  | "AUTH_EMAIL_NOT_CONFIRMED"
+  | "AUTH_SESSION_EXPIRED"
+  | "AUTH_RATE_LIMITED"
+  | "AUTH_NETWORK_ERROR"
+  | "AUTH_PROVIDER_ERROR"
+  | "AUTH_UNAUTHENTICATED";
+
+export interface AuthError {
+  code: AuthErrorCode;
+  message: string;
+}
+
+export type OperationResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: AuthError };
+
+export interface AuthenticationService {
+  register(input: RegisterInput): Promise<OperationResult<RegistrationResult>>;
+  signIn(input: SignInInput): Promise<OperationResult<AuthenticatedUserContext>>;
+  signOut(): Promise<OperationResult<void>>;
+  getAuthenticationState(): Promise<AuthenticationState>;
+  subscribeToAuthenticationState(
+    listener: (state: AuthenticationState) => void
+  ): () => void;
+}
+
+============================================================
+FILE: backend\src\modules\auth\auth.validation.ts
+============================================================
+import type { RegisterInput, SignInInput } from "./auth.types";
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: Partial<Record<"email" | "password", string>>;
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function validateRegisterInput(input: RegisterInput): ValidationResult {
+  const errors: ValidationResult["errors"] = {};
+  const email = input.email.trim();
+
+  if (!email || !EMAIL_PATTERN.test(email)) {
+    errors.email = "Email không hợp lệ.";
+  }
+
+  if (!input.password || input.password.trim().length === 0) {
+    errors.password = "Mật khẩu không được để trống.";
+  }
+
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+export function validateSignInInput(input: SignInInput): ValidationResult {
+  const errors: ValidationResult["errors"] = {};
+  const email = input.email.trim();
+
+  if (!email || !EMAIL_PATTERN.test(email)) {
+    errors.email = "Email không hợp lệ.";
+  }
+
+  if (!input.password) {
+    errors.password = "Mật khẩu không được để trống.";
+  }
+
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+============================================================
+FILE: backend\src\modules\auth\index.ts
+============================================================
+export * from "./auth.types";
+export * from "./auth.provider";
+export * from "./auth.errors";
+export * from "./auth.validation";
+export * from "./auth.service";
+export * from "./supabase.provider";
+
+============================================================
+FILE: backend\src\modules\auth\supabase.provider.ts
+============================================================
+
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type {
+  AuthProvider,
+  ProviderAuthEvent,
+  ProviderSession,
+  ProviderUser
+} from "./auth.provider";
+
+function mapUser(user: {
+  id: string;
+  email?: string;
+}): ProviderUser {
+  return {
+    id: user.id,
+    email: user.email ?? null
+  };
+}
+
+function mapSession(
+  session: {
+    user: {
+      id: string;
+      email?: string;
+    };
+    access_token: string;
+    refresh_token: string;
+    expires_at?: number;
+  } | null
+): ProviderSession | null {
+  if (!session) return null;
+
+  return {
+    user: mapUser(session.user),
+    accessToken: session.access_token,
+    refreshToken: session.refresh_token,
+    expiresAt: session.expires_at
+  };
+}
+
+/**
+ * Server-side Supabase Auth adapter.
+ *
+ * Each authentication operation gets its own client.
+ * No shared persisted session is kept between API requests.
+ */
+export function createSupabaseAuthProvider(
+  supabaseUrl: string,
+  publishableKey: string
+): AuthProvider {
+  if (!supabaseUrl || !publishableKey) {
+    throw new Error("Missing Supabase public configuration.");
+  }
+
+  function createAuthClient(): SupabaseClient {
+    return createClient(supabaseUrl, publishableKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false
+      }
+    });
+  }
+
+  return {
+    async register(email, password) {
+      const client = createAuthClient();
+
+      const { data, error } = await client.auth.signUp({
+        email,
+        password
+      });
+
+      return {
+        data: {
+          user: data.user ? mapUser(data.user) : null,
+          session: mapSession(data.session)
+        },
+        error
+      };
+    },
+
+    async signIn(email, password) {
+      const client = createAuthClient();
+
+      const { data, error } =
+        await client.auth.signInWithPassword({
+          email,
+          password
+        });
+
+      return {
+        data: {
+          user: data.user ? mapUser(data.user) : null,
+          session: mapSession(data.session)
+        },
+        error
+      };
+    },
+
+    async signOut() {
+      // The backend does not keep a shared Supabase session.
+      // The client must discard its locally stored access token.
+      return {
+        data: null,
+        error: null
+      };
+    },
+
+    async getSession() {
+      // Authentication state is verified per request by TokenVerifier.
+      return {
+        data: {
+          session: null
+        },
+        error: null
+      };
+    },
+
+    onAuthStateChange(
+      _callback: (
+        event: ProviderAuthEvent,
+        session: ProviderSession | null
+      ) => void
+    ) {
+      // There is no persistent server-side session to subscribe to.
+      return () => {};
+    }
+  };
+}
+
+============================================================
+FILE: backend\src\server\app.ts
+============================================================
+import http from "node:http";
+import { createSqliteDatabase, type DatabaseConnection } from "../infrastructure/database/sqlite.ts";
+import {
+  createApplicationContainer,
+  type ApplicationContainer,
+  type ContainerConfig
+} from "../application/container.ts";
+import { createApiHandler } from "../api/index.ts";
+
+export interface AppOptions {
+  dbPath?: string;
+  connection?: DatabaseConnection;
+  config?: ContainerConfig;
+  corsOrigin?: string;
+}
+
+export interface AppInstance {
+  server: http.Server;
+  container: ApplicationContainer;
+  close: () => Promise<void>;
+}
+
+export function createApp(options: AppOptions = {}): AppInstance {
+  const connection = options.connection ?? createSqliteDatabase({ dbPath: options.dbPath });
+  const container = createApplicationContainer(connection, options.config);
+  const corsOrigin = options.corsOrigin ?? "*";
+
+  const apiHandler = createApiHandler(container, corsOrigin);
+  const server = http.createServer(apiHandler);
+
+  return {
+    server,
+    container,
+    async close() {
+      return new Promise<void>((resolve, reject) => {
+        if (!server.listening) {
+          try {
+            connection.close();
+          } catch {
+            // ignore if already closed
+          }
+          resolve();
+          return;
+        }
+
+        server.close((err) => {
+          try {
+            connection.close();
+          } catch {
+            // ignore if already closed
+          }
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+    }
+  };
+}
+
+============================================================
+FILE: backend\src\server\index.ts
+============================================================
+
+import fs from "node:fs";
+import path from "node:path";
+import { createApp } from "./app.ts";
+
+// Simple .env reader if .env file exists
+function loadEnv(): void {
+  const envPath = path.resolve(process.cwd(), ".env");
+
+  if (fs.existsSync(envPath)) {
+    try {
+      const content = fs.readFileSync(envPath, "utf-8");
+
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+
+        if (!trimmed || trimmed.startsWith("#")) continue;
+
+        const eqIdx = trimmed.indexOf("=");
+
+        if (eqIdx !== -1) {
+          const key = trimmed.slice(0, eqIdx).trim();
+          const val = trimmed
+            .slice(eqIdx + 1)
+            .trim()
+            .replace(/^["']|["']$/g, "");
+
+          if (!(key in process.env)) {
+            process.env[key] = val;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+loadEnv();
+
+function positiveLimit(name: string, fallback: number, max: number): number {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) ? Math.max(1, Math.min(max, Math.trunc(value))) : fallback;
+}
+
+const port = Number(process.env.PORT || 3001);
+const dbPath = process.env.DATABASE_PATH || "./data/flow-up.db";
+const corsOrigin = process.env.CORS_ORIGIN || "*";
+
+const nodeEnv = process.env.NODE_ENV || "development";
+const isProduction = nodeEnv === "production";
+
+const authDevMode = process.env.AUTH_DEV_MODE;
+
+if (
+  authDevMode !== undefined &&
+  authDevMode !== "true" &&
+  authDevMode !== "false"
+) {
+  throw new Error(
+    "AUTH_DEV_MODE must be either 'true' or 'false'."
+  );
+}
+
+const devMode = !isProduction && authDevMode === "true";
+
+if (isProduction && authDevMode === "true") {
+  throw new Error(
+    "AUTH_DEV_MODE cannot be enabled in production."
+  );
+}
+
+if (isProduction && (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY)) {
+  throw new Error(
+    "SUPABASE_URL and SUPABASE_ANON_KEY are required in production."
+  );
+}
+
+const app = createApp({
+  dbPath,
+  corsOrigin,
+  config: {
+    auth: {
+      supabaseUrl: process.env.SUPABASE_URL,
+      supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
+      devMode
+    },
+    ai: {
+      apiKey: process.env.GEMINI_API_KEY,
+      model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
+      timeoutMs: positiveLimit("AI_TIMEOUT_MS", 20000, 60000),
+      perUserDaily: positiveLimit("AI_DAILY_USER_LIMIT", 12, 100),
+      globalDaily: positiveLimit("AI_DAILY_GLOBAL_LIMIT", 90, 1000),
+    },
+  }
+});
+
+app.server.listen(port, () => {
+  console.log("====================================================");
+  console.log(`  FLOW-UP Backend Server running on port ${port}`);
+  console.log(`  Health Check: http://localhost:${port}/health`);
+  console.log(`  API Base:     http://localhost:${port}/api`);
+  console.log(`  Database:     ${dbPath}`);
+  console.log(`  Environment:  ${nodeEnv}`);
+  console.log(`  Dev Mode:     ${devMode ? "ENABLED" : "DISABLED"}`);
+  console.log("====================================================");
+});
+
+const shutdown = async () => {
+  console.log("\nStopping FLOW-UP server...");
+
+  try {
+    await app.close();
+    console.log("FLOW-UP server gracefully stopped.");
+    process.exit(0);
+  } catch (err) {
+    console.error("Error during shutdown:", err);
+    process.exit(1);
+  }
+};
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+============================================================
+FILE: backend\src\server\init-db.ts
+============================================================
+import fs from "node:fs";
+import path from "node:path";
+import { createSqliteDatabase } from "../infrastructure/database/sqlite.ts";
+
+function loadEnv(): void {
+  const envPath = path.resolve(process.cwd(), ".env");
+  if (fs.existsSync(envPath)) {
+    try {
+      const content = fs.readFileSync(envPath, "utf-8");
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx !== -1) {
+          const key = trimmed.slice(0, eqIdx).trim();
+          const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
+          if (!(key in process.env)) {
+            process.env[key] = val;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+loadEnv();
+
+const dbPath = process.env.DATABASE_PATH || "./data/flow-up.db";
+console.log(`Initializing SQLite database at: ${dbPath}...`);
+
+const db = createSqliteDatabase({ dbPath });
+console.log("Database schema initialized and foreign keys enabled successfully!");
+db.close();
+console.log("Database connection closed.");

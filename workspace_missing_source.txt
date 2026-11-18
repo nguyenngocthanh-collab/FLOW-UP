@@ -1,0 +1,795 @@
+
+============================================================
+FILE: backend/src/server/app.ts
+============================================================
+import http from "node:http";
+import { createSqliteDatabase, type DatabaseConnection } from "../infrastructure/database/sqlite.ts";
+import {
+  createApplicationContainer,
+  type ApplicationContainer,
+  type ContainerConfig
+} from "../application/container.ts";
+import { createApiHandler } from "../api/index.ts";
+
+export interface AppOptions {
+  dbPath?: string;
+  connection?: DatabaseConnection;
+  config?: ContainerConfig;
+  corsOrigin?: string;
+}
+
+export interface AppInstance {
+  server: http.Server;
+  container: ApplicationContainer;
+  close: () => Promise<void>;
+}
+
+export function createApp(options: AppOptions = {}): AppInstance {
+  const connection = options.connection ?? createSqliteDatabase({ dbPath: options.dbPath });
+  const container = createApplicationContainer(connection, options.config);
+  const corsOrigin = options.corsOrigin ?? "*";
+
+  const apiHandler = createApiHandler(container, corsOrigin);
+  const server = http.createServer(apiHandler);
+
+  return {
+    server,
+    container,
+    async close() {
+      return new Promise<void>((resolve, reject) => {
+        if (!server.listening) {
+          try {
+            connection.close();
+          } catch {
+            // ignore if already closed
+          }
+          resolve();
+          return;
+        }
+
+        server.close((err) => {
+          try {
+            connection.close();
+          } catch {
+            // ignore if already closed
+          }
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+    }
+  };
+}
+
+============================================================
+FILE: backend/src/api/index.ts
+============================================================
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ApplicationContainer } from "../application/container.ts";
+import { Router } from "./router.ts";
+import { extractBearerToken, parseJsonBody, sendError } from "./http.ts";
+import type { RequestContext } from "./types.ts";
+import { registerHealthRoutes } from "./routes/health.routes.ts";
+import { registerAuthRoutes } from "./routes/auth.routes.ts";
+import { registerWorkspaceRoutes } from "./routes/workspace.routes.ts";
+import { registerProjectRoutes } from "./routes/project.routes.ts";
+import { registerGoalRoutes } from "./routes/goal.routes.ts";
+import { registerMilestoneRoutes } from "./routes/milestone.routes.ts";
+import { registerActionRoutes } from "./routes/action.routes.ts";
+import { registerPlanningRoutes } from "./routes/planning.routes.ts";
+import { registerProgressRoutes } from "./routes/progress.routes.ts";
+import { registerAIRoutes } from "./routes/ai.routes.ts";
+import { registerMeasurementRoutes } from "./routes/measurement.routes.ts";
+
+export * from "./types.ts";
+export * from "./http.ts";
+export * from "./router.ts";
+
+export function createRouter(): Router {
+  const router = new Router();
+
+  registerHealthRoutes(router);
+  registerAuthRoutes(router);
+  registerWorkspaceRoutes(router);
+  registerProjectRoutes(router);
+  registerGoalRoutes(router);
+  registerMilestoneRoutes(router);
+  registerActionRoutes(router);
+  registerPlanningRoutes(router);
+  registerProgressRoutes(router);
+  registerAIRoutes(router);
+  registerMeasurementRoutes(router);
+
+  return router;
+}
+
+export function createApiHandler(
+  container: ApplicationContainer,
+  corsOrigin = "*"
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const router = createRouter();
+
+  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    // 1. Handle CORS preflight
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": corsOrigin,
+        "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Workspace-Id",
+        "Access-Control-Max-Age": "86400"
+      });
+      res.end();
+      return;
+    }
+
+    try {
+      const parsedUrl = new URL(req.url ?? "/", "http://localhost");
+      const pathname = parsedUrl.pathname;
+      const query = parsedUrl.searchParams;
+      const method = req.method ?? "GET";
+
+      const match = router.match(method, pathname);
+      if (!match) {
+        sendError(
+          res,
+          404,
+          "ROUTE_NOT_FOUND",
+          `Route not found: ${method} ${pathname}`,
+          corsOrigin
+        );
+        return;
+      }
+
+      // 2. Authentication check
+      let user: import("../modules/auth/auth.types.ts").AuthenticatedUserContext | null = null;
+      const token = extractBearerToken(req);
+      if (token) {
+        user = await container.tokenVerifier.verifyToken(token);
+        const selectedWorkspaceId = req.headers["x-workspace-id"];
+        if (user && typeof selectedWorkspaceId === "string" && selectedWorkspaceId.trim()) {
+          user = { ...user, workspaceId: selectedWorkspaceId.trim() };
+        }
+      }
+
+      if (match.requiresAuth && !user) {
+        sendError(
+          res,
+          401,
+          "UNAUTHORIZED",
+          "Authentication required. Please provide a valid Bearer token.",
+          corsOrigin
+        );
+        return;
+      }
+
+      // 3. Body parsing for POST / PATCH / PUT
+      let body: unknown = null;
+      if (["POST", "PATCH", "PUT"].includes(method)) {
+        try {
+          body = await parseJsonBody(req);
+        } catch (err: unknown) {
+          sendError(
+            res,
+            400,
+            "INVALID_JSON_BODY",
+            (err as Error)?.message || "Malformed JSON body.",
+            corsOrigin
+          );
+          return;
+        }
+      }
+
+      // 4. Request context
+      const ctx: RequestContext = {
+        req,
+        res,
+        container,
+        user,
+        params: match.params,
+        query,
+        body,
+        corsOrigin
+      };
+
+      // 5. Execute handler
+      await match.handler(ctx);
+    } catch (err: unknown) {
+      console.error("[API Error]", err);
+      if (!res.writableEnded) {
+        sendError(
+          res,
+          500,
+          "INTERNAL_SERVER_ERROR",
+          "An unexpected server error occurred.",
+          corsOrigin
+        );
+      }
+    }
+  };
+}
+
+============================================================
+FILE: backend/src/api/types.ts
+============================================================
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AuthenticatedUserContext } from "../modules/auth/auth.types.ts";
+import type { ApplicationContainer } from "../application/container.ts";
+
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD";
+
+export interface RequestContext {
+  req: IncomingMessage;
+  res: ServerResponse;
+  container: ApplicationContainer;
+  user: AuthenticatedUserContext | null;
+  params: Record<string, string>;
+  query: URLSearchParams;
+  body: unknown;
+  corsOrigin: string;
+}
+
+export type RouteHandler = (ctx: RequestContext) => Promise<void> | void;
+
+export interface RouteMatch {
+  handler: RouteHandler;
+  params: Record<string, string>;
+  requiresAuth: boolean;
+}
+
+============================================================
+FILE: backend/src/api/http.ts
+============================================================
+import type { IncomingMessage, ServerResponse } from "node:http";
+
+export function sendJson(
+  res: ServerResponse,
+  statusCode: number,
+  data: unknown,
+  corsOrigin = "*"
+): void {
+  if (res.writableEnded) return;
+
+  const jsonString = JSON.stringify(data);
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(jsonString),
+    "Access-Control-Allow-Origin": corsOrigin,
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Workspace-Id",
+    "Access-Control-Max-Age": "86400"
+  });
+  res.end(jsonString);
+}
+
+export function sendSuccess<T>(
+  res: ServerResponse,
+  data: T,
+  statusCode = 200,
+  corsOrigin = "*"
+): void {
+  sendJson(res, statusCode, { success: true, data }, corsOrigin);
+}
+
+export function sendError(
+  res: ServerResponse,
+  statusCode: number,
+  code: string,
+  message: string,
+  corsOrigin = "*"
+): void {
+  sendJson(res, statusCode, { success: false, error: { code, message } }, corsOrigin);
+}
+
+export function getStatusCodeForError(code: string): number {
+  if (code.includes("RATE_LIMITED")) return 429;
+  if (
+    code.includes("INVALID_CREDENTIALS") ||
+    code.includes("EMAIL_NOT_CONFIRMED") ||
+    code.includes("UNAUTHENTICATED")
+  ) return 401;
+  if (code.includes("PROVIDER_ERROR") || code.includes("NETWORK_ERROR")) return 502;
+  if (code.includes("NOT_FOUND")) return 404;
+  if (code.includes("ACCESS_DENIED") || code.includes("OWNERSHIP")) return 403;
+  if (code.includes("ALREADY_EXISTS") || code.includes("CIRCULAR") || code.includes("CONFLICT")) return 409;
+  if (code.includes("INVALID") || code.includes("INPUT") || code.includes("REQUIRED")) return 400;
+  return 400;
+}
+
+export async function parseJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.setEncoding("utf-8");
+
+    req.on("data", (chunk: string) => {
+      raw += chunk;
+      if (raw.length > 1024 * 1024) {
+        // 1MB limit
+        reject(new Error("Request payload too large"));
+      }
+    });
+
+    req.on("end", () => {
+      if (!raw.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        resolve(parsed);
+      } catch {
+        reject(new Error("Invalid JSON body"));
+      }
+    });
+
+    req.on("error", (err) => {
+      reject(err);
+    });
+  });
+}
+
+export function extractBearerToken(req: IncomingMessage): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return null;
+
+  const parts = authHeader.trim().split(/\s+/);
+  if (parts.length === 2 && parts[0].toLowerCase() === "bearer") {
+    return parts[1];
+  }
+  return null;
+}
+
+============================================================
+FILE: backend/src/modules/auth/auth.types.ts
+============================================================
+export interface RegisterInput {
+  email: string;
+  password: string;
+}
+
+export interface SignInInput {
+  email: string;
+  password: string;
+}
+
+export interface AuthenticatedUserContext {
+  userId: string;
+  email: string | null;
+  isAuthenticated: true;
+  /** Selected by the client; every use must still verify workspace ownership. */
+  workspaceId?: string;
+}
+
+export type AuthenticationState =
+  | { status: "loading"; user: null }
+  | { status: "unauthenticated"; user: null }
+  | { status: "authenticated"; user: AuthenticatedUserContext };
+
+export type RegistrationResult =
+  | { status: "confirmation_required"; email: string }
+  | { status: "authenticated"; user: AuthenticatedUserContext };
+
+export type AuthErrorCode =
+  | "AUTH_INVALID_INPUT"
+  | "AUTH_INVALID_CREDENTIALS"
+  | "AUTH_EMAIL_ALREADY_EXISTS"
+  | "AUTH_EMAIL_NOT_CONFIRMED"
+  | "AUTH_SESSION_EXPIRED"
+  | "AUTH_RATE_LIMITED"
+  | "AUTH_NETWORK_ERROR"
+  | "AUTH_PROVIDER_ERROR"
+  | "AUTH_UNAUTHENTICATED";
+
+export interface AuthError {
+  code: AuthErrorCode;
+  message: string;
+}
+
+export type OperationResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: AuthError };
+
+export interface AuthenticationService {
+  register(input: RegisterInput): Promise<OperationResult<RegistrationResult>>;
+  signIn(input: SignInInput): Promise<OperationResult<AuthenticatedUserContext>>;
+  signOut(): Promise<OperationResult<void>>;
+  getAuthenticationState(): Promise<AuthenticationState>;
+  subscribeToAuthenticationState(
+    listener: (state: AuthenticationState) => void
+  ): () => void;
+}
+
+============================================================
+FILE: backend/src/modules/auth/auth.service.ts
+============================================================
+
+import type { AuthProvider } from "./auth.provider";
+import { createAuthError, normalizeProviderError } from "./auth.errors";
+import type {
+  AuthenticationService,
+  AuthenticationState,
+  AuthenticatedUserContext,
+  OperationResult,
+  RegistrationResult,
+  RegisterInput,
+  SignInInput
+} from "./auth.types";
+import { validateRegisterInput, validateSignInInput } from "./auth.validation";
+
+export interface AuthenticationApiService {
+  register(
+    input: RegisterInput
+  ): Promise<
+    OperationResult<{
+      registration: RegistrationResult;
+      accessToken: string | null;
+    }>
+  >;
+
+  signIn(
+    input: SignInInput
+  ): Promise<
+    OperationResult<{
+      user: AuthenticatedUserContext;
+      accessToken: string | null;
+    }>
+  >;
+}
+
+function toUserContext(user: {
+  id: string;
+  email: string | null;
+}): AuthenticatedUserContext {
+  return {
+    userId: user.id,
+    email: user.email,
+    isAuthenticated: true
+  };
+}
+
+function success<T>(data: T): OperationResult<T> {
+  return { success: true, data };
+}
+
+function failure<T>(
+  code: Parameters<typeof createAuthError>[0]
+): OperationResult<T> {
+  return {
+    success: false,
+    error: createAuthError(code)
+  };
+}
+
+export function createAuthenticationService(
+  provider: AuthProvider
+): AuthenticationService {
+  return {
+    async register(
+      input: RegisterInput
+    ): Promise<OperationResult<RegistrationResult>> {
+      if (!validateRegisterInput(input).valid) {
+        return failure("AUTH_INVALID_INPUT");
+      }
+
+      try {
+        const result = await provider.register(
+          input.email.trim(),
+          input.password
+        );
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        if (result.data.session && result.data.user) {
+          return success({
+            status: "authenticated",
+            user: toUserContext(result.data.user)
+          });
+        }
+
+        return success({
+          status: "confirmation_required",
+          email: input.email.trim()
+        });
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    },
+
+    async signIn(
+      input: SignInInput
+    ): Promise<OperationResult<AuthenticatedUserContext>> {
+      if (!validateSignInInput(input).valid) {
+        return failure("AUTH_INVALID_INPUT");
+      }
+
+      try {
+        const result = await provider.signIn(
+          input.email.trim(),
+          input.password
+        );
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        if (!result.data.session || !result.data.user) {
+          return failure("AUTH_INVALID_CREDENTIALS");
+        }
+
+        return success(toUserContext(result.data.user));
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    },
+
+    async signOut(): Promise<OperationResult<void>> {
+      try {
+        const result = await provider.signOut();
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        return success(undefined);
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    },
+
+    async getAuthenticationState(): Promise<AuthenticationState> {
+      try {
+        const result = await provider.getSession();
+
+        if (result.error || !result.data.session) {
+          return {
+            status: "unauthenticated",
+            user: null
+          };
+        }
+
+        return {
+          status: "authenticated",
+          user: toUserContext(result.data.session.user)
+        };
+      } catch {
+        return {
+          status: "unauthenticated",
+          user: null
+        };
+      }
+    },
+
+    subscribeToAuthenticationState(listener) {
+      return provider.onAuthStateChange((_event, session) => {
+        if (session) {
+          listener({
+            status: "authenticated",
+            user: toUserContext(session.user)
+          });
+        } else {
+          listener({
+            status: "unauthenticated",
+            user: null
+          });
+        }
+      });
+    }
+  };
+}
+
+/**
+ * API-specific authentication service.
+ * Returns the access token supplied by the authentication provider.
+ * Does not change the B01 AuthenticationService contract.
+ */
+export function createAuthenticationApiService(
+  provider: AuthProvider
+): AuthenticationApiService {
+  return {
+    async register(input: RegisterInput) {
+      if (!validateRegisterInput(input).valid) {
+        return failure("AUTH_INVALID_INPUT");
+      }
+
+      try {
+        const result = await provider.register(
+          input.email.trim(),
+          input.password
+        );
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        if (result.data.session && result.data.user) {
+          return success({
+            registration: {
+              status: "authenticated",
+              user: toUserContext(result.data.user)
+            },
+            accessToken: result.data.session.accessToken ?? null
+          });
+        }
+
+        return success({
+          registration: {
+            status: "confirmation_required",
+            email: input.email.trim()
+          },
+          accessToken: null
+        });
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    },
+
+    async signIn(input: SignInInput) {
+      if (!validateSignInInput(input).valid) {
+        return failure("AUTH_INVALID_INPUT");
+      }
+
+      try {
+        const result = await provider.signIn(
+          input.email.trim(),
+          input.password
+        );
+
+        if (result.error) {
+          return {
+            success: false,
+            error: normalizeProviderError(result.error)
+          };
+        }
+
+        if (!result.data.session || !result.data.user) {
+          return failure("AUTH_INVALID_CREDENTIALS");
+        }
+
+        return success({
+          user: toUserContext(result.data.user),
+          accessToken: result.data.session.accessToken ?? null
+        });
+      } catch (error) {
+        return {
+          success: false,
+          error: normalizeProviderError(error)
+        };
+      }
+    }
+  };
+}
+
+============================================================
+FILE: backend/src/infrastructure/database/sqlite.ts
+============================================================
+import { DatabaseSync } from "node:sqlite";
+import fs from "node:fs";
+import path from "node:path";
+import { SCHEMA_SQL } from "./schema.ts";
+
+export interface DatabaseConnection {
+  readonly db: DatabaseSync;
+  runInTransaction<T>(fn: () => T): T;
+  close(): void;
+}
+
+export interface SqliteOptions {
+  dbPath?: string;
+}
+
+/**
+ * Initializes SQLite database connection with foreign keys enabled
+ * and executes initial schema migrations.
+ */
+export function createSqliteDatabase(options: SqliteOptions = {}): DatabaseConnection {
+  const dbPath = options.dbPath ?? ":memory:";
+
+  if (dbPath !== ":memory:") {
+    const dir = path.dirname(path.resolve(dbPath));
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+
+  const db = new DatabaseSync(dbPath);
+
+  // Enable foreign keys
+  db.exec("PRAGMA foreign_keys = ON;");
+
+  if (dbPath !== ":memory:") {
+    try {
+      db.exec("PRAGMA journal_mode = WAL;");
+    } catch {
+      // WAL may not be supported on all environments, ignore if fails
+    }
+  }
+
+  // Initialize schema
+  db.exec(SCHEMA_SQL);
+  migrateMultipleWorkspaces(db);
+
+  return {
+    get db() {
+      return db;
+    },
+    runInTransaction<T>(fn: () => T): T {
+      db.exec("BEGIN IMMEDIATE TRANSACTION;");
+      try {
+        const result = fn();
+        db.exec("COMMIT;");
+        return result;
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK;");
+        } catch {
+          // ignore rollback failure if transaction already ended
+        }
+        throw error;
+      }
+    },
+    close() {
+      db.close();
+    }
+  };
+}
+
+/** Remove the legacy UNIQUE(user_id) constraint without changing existing workspace IDs or data. */
+function migrateMultipleWorkspaces(db: DatabaseSync): void {
+  const indexes = db.prepare("PRAGMA index_list('workspaces')").all() as Array<{ name: string; unique: number; origin: string }>;
+  const hasLegacyUserUniqueness = indexes.some((index) => {
+    if (index.unique !== 1 || index.origin !== "u") return false;
+    const columns = db.prepare(`PRAGMA index_info('${index.name.replaceAll("'", "''")}')`).all() as Array<{ name: string }>;
+    return columns.length === 1 && columns[0]?.name === "user_id";
+  });
+  if (!hasLegacyUserUniqueness) return;
+
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE workspaces_migration (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO workspaces_migration (id, user_id, name, created_at, updated_at)
+        SELECT id, user_id, name, created_at, updated_at FROM workspaces;
+      DROP TABLE workspaces;
+      ALTER TABLE workspaces_migration RENAME TO workspaces;
+      CREATE INDEX idx_workspaces_user_id ON workspaces(user_id, created_at);
+      COMMIT;
+    `);
+  } catch (error) {
+    try { db.exec("ROLLBACK;"); } catch { /* transaction may already have rolled back */ }
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+}

@@ -1,0 +1,4221 @@
+FLOW-UP - WORKSPACE MANAGER / DASHBOARD
+Generated: 2026-11-18 21:07:49
+Root: W:\Projects\FLOW-UP
+Selected files: 7
+==============================================
+
+
+============================================================
+FILE: src/app/App.tsx
+============================================================
+import { DashboardHome } from './DashboardHome';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type FormEvent,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from 'react';
+import {
+  api,
+  ApiError,
+  clearToken,
+  getStoredToken,
+  getStoredWorkspaceId,
+  saveToken,
+  saveWorkspaceId,
+  type Action,
+  type ActionStatus,
+  type AIClarification,
+  type AIFeasibility,
+  type AIProposal,
+  type AIProposalItem,
+  type Execution,
+  type Goal,
+  type GoalNode,
+  type Milestone,
+  type Measurement,
+  type MeasurementRecord,
+  type Project,
+  type ProgressSummary,
+  type Schedule,
+  type UserContext,
+  type Workspace,
+} from '../lib/api';
+import '../assistant.css';
+import '../measurement.css';
+import './workspace-manager.css';
+import { PlanningCalendar } from '../planning/PlanningCalendar';
+
+type Page = 'workspaces' | 'home' | 'projects' | 'goals' | 'planning' | 'review' | 'assistant';
+type Notice = { kind: 'success' | 'error'; text: string } | null;
+function messageOf(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : 'Something went wrong. Please try again.';
+}
+function dateLabel(value?: string | null): string {
+  return value
+    ? new Date(`${value.slice(0, 10)}T12:00:00`).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : 'No target date';
+}
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+function localDateTimeInput(value?: string | null): string {
+  if (!value) return '';
+  const date = new Date(value);
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function initials(value?: string | null): string {
+  return (value?.split('@')[0] ?? 'U').slice(0, 2).toUpperCase();
+}
+
+function Button({
+  children,
+  variant = 'primary',
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: 'primary' | 'secondary' | 'quiet' | 'danger';
+}) {
+  return (
+    <button
+      className={`button button--${variant} ${props.className ?? ''}`}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Field({
+  label,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & { label: string }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input {...props} />
+    </label>
+  );
+}
+
+function TextArea({
+  label,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <textarea rows={3} {...props} />
+    </label>
+  );
+}
+
+function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <header className="modal__header">
+          <h2>{title}</h2>
+          <button className="icon-button" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </header>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function Loading({ label = 'Loading' }: { label?: string }) {
+  return (
+    <div className="loading">
+      <span className="spinner" />
+      {label}
+    </div>
+  );
+}
+
+function AuthScreen({
+  onAuthenticated,
+  notify,
+}: {
+  onAuthenticated: (user: UserContext) => void;
+  notify: (notice: Notice) => void;
+}) {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirmation, setConfirmation] = useState('');
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setConfirmation('');
+    if (
+      !email.trim() ||
+      !/^\S+@\S+\.\S+$/.test(email.trim()) ||
+      !password.trim()
+    ) {
+      notify({ kind: 'error', text: 'Enter a valid email and password.' });
+      return;
+    }
+    setBusy(true);
+    try {
+      if (mode === 'login') {
+        const result = await api.login(email.trim(), password);
+        saveToken(result.token);
+        onAuthenticated(result.user);
+      } else {
+        const result = await api.register(email.trim(), password);
+        if (!result.token) {
+          setConfirmation(
+            'Check your email to confirm your account, then sign in.',
+          );
+          return;
+        }
+        saveToken(result.token);
+        const session = await api.session();
+        onAuthenticated(session.user);
+      }
+    } catch (error) {
+      notify({ kind: 'error', text: messageOf(error) });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <main className="auth-page">
+      <div className="auth-art">
+        <div className="brand brand--large">
+          <span className="brand__mark">f</span>
+          <span>flow-up</span>
+        </div>
+        <div className="auth-art__copy">
+          <span className="eyebrow">MAKE ROOM FOR WHAT MATTERS</span>
+          <h1>
+            Small steps.
+            <br />
+            <em>Meaningful</em> progress.
+          </h1>
+          <p>Bring your goals, plans, and daily actions into one calm place.</p>
+        </div>
+        <div className="auth-art__orbit auth-art__orbit--one" />
+        <div className="auth-art__orbit auth-art__orbit--two" />
+        <span className="auth-art__spark">✳</span>
+      </div>
+      <section className="auth-panel">
+        <div className="auth-panel__inner">
+          <span className="eyebrow">YOUR PERSONAL WORKSPACE</span>
+          <h2>{mode === 'login' ? 'Welcome back' : 'Create your account'}</h2>
+          <p className="muted">
+            {mode === 'login'
+              ? 'Sign in to continue your momentum.'
+              : 'Start turning your intentions into progress.'}
+          </p>
+          <form onSubmit={submit} className="form-stack">
+            <Field
+              label="Email address"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+            <Field
+              label="Password"
+              type="password"
+              autoComplete={
+                mode === 'login' ? 'current-password' : 'new-password'
+              }
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+            {confirmation && <p className="inline-success">{confirmation}</p>}
+            <Button disabled={busy}>
+              {busy
+                ? 'Please wait…'
+                : mode === 'login'
+                  ? 'Sign in'
+                  : 'Create account'}
+            </Button>
+          </form>
+          <p className="auth-switch">
+            {mode === 'login' ? 'New to FLOW-UP?' : 'Already have an account?'}{' '}
+            <button
+              onClick={() => {
+                setMode(mode === 'login' ? 'register' : 'login');
+                setConfirmation('');
+              }}
+            >
+              {mode === 'login' ? 'Create an account' : 'Sign in'}
+            </button>
+          </p>
+          <p className="auth-footnote">
+            Your session stays in this browser tab and is cleared when you sign
+            out.
+          </p>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function Sidebar({
+  page,
+  setPage,
+  user,
+  workspace,
+  onLogout,
+  mobileOpen,
+  closeMobile,
+}: {
+  page: Page;
+  setPage: (page: Page) => void;
+  user: UserContext;
+  workspace: Workspace | null;
+  onLogout: () => void;
+  mobileOpen: boolean;
+  closeMobile: () => void;
+}) {
+  const items: { id: Page; label: string; icon: string }[] = [
+    { id: 'workspaces', label: 'Workspaces', icon: '⌂' },
+    { id: 'assistant', label: 'Goal discovery', icon: 'AI' },
+    { id: 'home', label: 'Overview', icon: '◫' },
+    { id: 'projects', label: 'Projects', icon: '▦' },
+    { id: 'goals', label: 'Goals', icon: '◎' },
+    { id: 'review', label: 'Review', icon: '↗' },
+    { id: 'planning', label: 'Planning', icon: '▤' },
+  ];
+  return (
+    <>
+      <aside className={`sidebar ${mobileOpen ? 'sidebar--open' : ''}`}>
+        <div className="brand">
+          <span className="brand__mark">f</span>
+          <span>flow-up</span>
+        </div>
+        <div className="workspace-switch">
+          <span className="workspace-switch__icon">⌂</span>
+          <span>
+            <small>WORKSPACE</small>
+            <strong>{workspace?.name ?? 'Your workspace'}</strong>
+          </span>
+          <span className="workspace-switch__chevron">⌄</span>
+        </div>
+        <nav className="nav-list" aria-label="Main navigation">
+          <span className="nav-label">MENU</span>
+          {items.map((item) => (
+            <button
+              key={item.id}
+              className={`nav-item ${page === item.id ? 'nav-item--active' : ''}`}
+              onClick={() => {
+                setPage(item.id);
+                closeMobile();
+              }}
+            >
+              <span className="nav-item__icon">{item.icon}</span>
+              {item.label}
+              {page === item.id && <span className="nav-item__active-dot" />}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar__bottom">
+          <div className="sidebar-tip">
+            <span>✦</span>
+            <strong>Keep going</strong>
+            <p>Progress grows from the steps you take each day.</p>
+          </div>
+          <button className="profile-button" onClick={onLogout}>
+            <span className="avatar">{initials(user.email)}</span>
+            <span className="profile-button__info">
+              <strong>{user.email ?? 'Your account'}</strong>
+              <small>Personal account</small>
+            </span>
+            <span className="profile-button__menu">↗</span>
+          </button>
+        </div>
+      </aside>
+      {mobileOpen && (
+        <button
+          aria-label="Close menu"
+          className="mobile-scrim"
+          onClick={closeMobile}
+        />
+      )}
+    </>
+  );
+}
+
+function GoalTree({
+  nodes,
+  selectedId,
+  onSelect,
+  depth = 0,
+}: {
+  nodes: GoalNode[];
+  selectedId: string | null;
+  onSelect: (goal: Goal) => void;
+  depth?: number;
+}) {
+  return (
+    <>{nodes.map((node) => <GoalTreeNode key={node.goal.id} node={node} selectedId={selectedId} onSelect={onSelect} depth={depth} />)}</>
+  );
+}
+
+function GoalTreeNode({ node, selectedId, onSelect, depth }: {
+  node: GoalNode; selectedId: string | null; onSelect: (goal: Goal) => void; depth: number;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const { goal, children } = node;
+  return <div className="goal-tree__node">
+    <div className="goal-tree__node-head">
+      <button className={`tree-row ${selectedId === goal.id ? 'tree-row--active' : ''}`} style={{ paddingLeft: `${14 + depth * 18}px` }} onClick={() => onSelect(goal)}>
+        <span className="tree-row__branch">{depth ? '↳' : '○'}</span><span>{goal.title}</span>
+        <span className="tree-row__status">{goal.status.toLowerCase().replaceAll('_', ' ')}</span>
+      </button>
+      {children.length > 0 && <button type="button" className="tree-toggle" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${goal.title}`} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? '−' : '+'}</button>}
+    </div>
+    {expanded && children.map((child) => <GoalTreeNode key={child.goal.id} node={child} selectedId={selectedId} onSelect={onSelect} depth={depth + 1} />)}
+  </div>;
+}
+
+function GoalAssistantPage({
+  onApplied,
+  onManual,
+}: {
+  onApplied: () => Promise<void>;
+  onManual: () => void;
+}) {
+  const [input, setInput] = useState(() => sessionStorage.getItem('flow-up.goal-discovery.input') ?? '');
+  const [understanding, setUnderstanding] = useState<AIClarification | null>(null);
+  const [feasibility, setFeasibility] = useState<AIFeasibility | null>(null);
+  const [proposal, setProposal] = useState<AIProposal | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(sessionStorage.getItem('flow-up.goal-discovery.answers') ?? '{}') as Record<string, string>; }
+    catch { return {}; }
+  });
+  const [selected, setSelected] = useState<string[]>([]);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const [result, setResult] = useState('');
+  const requestInFlight = useRef(false);
+
+  useEffect(() => {
+    if (input) sessionStorage.setItem('flow-up.goal-discovery.input', input);
+    else sessionStorage.removeItem('flow-up.goal-discovery.input');
+  }, [input]);
+  useEffect(() => {
+    sessionStorage.setItem('flow-up.goal-discovery.answers', JSON.stringify(answers));
+  }, [answers]);
+
+  function workflowInput(): string {
+    const replies = understanding?.questions
+      .filter((question) => answers[question.id]?.trim())
+      .map((question) => `${question.prompt}: ${answers[question.id]}`) ?? [];
+    return replies.length ? `${input}\n\nClarification answers:\n${replies.join('\n')}` : input;
+  }
+
+  useEffect(() => {
+    const proposalId = sessionStorage.getItem('flow-up.current-ai-proposal');
+    if (!proposalId) return;
+    let active = true;
+    api.getAIProposal(proposalId).then((saved) => {
+      if (!active || !['PENDING_REVIEW', 'EDITED', 'PARTIALLY_APPROVED', 'FAILED'].includes(saved.status)) return;
+      setProposal(saved);
+      setSelected(saved.proposalData.items.filter((item) => !saved.proposalData.applicationResults?.some((entry) => entry.operation === item.id && entry.success)).map((item) => item.id));
+    }).catch(() => sessionStorage.removeItem('flow-up.current-ai-proposal'));
+    return () => { active = false; };
+  }, []);
+
+  async function run<T>(label: string, action: () => Promise<T>, done: (value: T) => void) {
+    if (requestInFlight.current) return;
+    if (!input.trim()) { setError('Describe the outcome you want to work toward.'); return; }
+    requestInFlight.current = true;
+    setError(''); setResult(''); setBusy(label);
+    try { done(await action()); }
+    catch (reason) { setError(messageOf(reason)); }
+    finally { requestInFlight.current = false; setBusy(''); }
+  }
+
+  function updateProposalItem(itemId: string, change: Partial<AIProposalItem>) {
+    if (!proposal) return;
+    setProposal({ ...proposal, proposalData: { ...proposal.proposalData,
+      items: proposal.proposalData.items.map((item) => item.id === itemId ? { ...item, ...change } : item),
+    } });
+  }
+
+  async function apply() {
+    if (requestInFlight.current || !proposal || !selected.length) return;
+    requestInFlight.current = true;
+    setBusy('apply'); setError(''); setResult('');
+    try {
+      const response = await api.applyAIProposal(proposal.id, {
+        selectedItemIds: selected,
+        editedData: proposal.proposalData,
+      });
+      const latest = await api.getAIProposal(proposal.id);
+      setProposal(latest);
+      const succeeded = response.operations.filter((operation) => operation.success).map((operation) => operation.operation);
+      const failed = response.operations.filter((operation) => !operation.success).map((operation) => operation.operation);
+      if (response.status === 'APPLIED') {
+        sessionStorage.removeItem('flow-up.current-ai-proposal');
+        sessionStorage.removeItem('flow-up.goal-discovery.input');
+        sessionStorage.removeItem('flow-up.goal-discovery.answers');
+        setInput('');
+        setAnswers({});
+        await onApplied();
+      }
+      else {
+        setSelected(latest.proposalData.items.filter((item) => !latest.proposalData.applicationResults?.some((entry) => entry.operation === item.id && entry.success)).map((item) => item.id));
+        setResult(`${succeeded.length} item(s) were saved. ${failed.length} item(s) need attention. Successfully saved items are locked against duplicate application.`);
+      }
+    } catch (reason) { setError(messageOf(reason)); }
+    finally { requestInFlight.current = false; setBusy(''); }
+  }
+
+  async function reject() {
+    if (requestInFlight.current || !proposal) return;
+    requestInFlight.current = true;
+    setBusy('reject'); setError('');
+    try { await api.rejectAIProposal(proposal.id); setProposal(null); sessionStorage.removeItem('flow-up.current-ai-proposal'); setResult('Proposal rejected. Nothing was added to your goals.'); }
+    catch (reason) { setError(messageOf(reason)); }
+    finally { requestInFlight.current = false; setBusy(''); }
+  }
+
+  return (
+    <div className="assistant-layout">
+      <section className="panel assistant-panel">
+        <div className="panel__heading">
+          <div><span className="eyebrow">AI-GUIDED, USER-CONTROLLED</span><h2>What would you like to achieve?</h2></div>
+        </div>
+        <div className="muted">
+          <p>When you request AI help, your text is sent to Google Gemini. Free-tier content may be used to improve Google products.</p>
+          <details>
+            <summary>Privacy details</summary>
+            <p>Share only information you are comfortable sending to Google. Avoid sensitive personal information.</p>
+          </details>
+        </div>
+        <TextArea label="Your goal and any useful context" value={input} maxLength={4000}
+          placeholder="For example: I want to improve my health and have more energy, but I am not sure where to start."
+          onChange={(event) => setInput(event.target.value)} />
+        <div className="heading-actions">
+          <Button disabled={!!busy || !input.trim()} onClick={() => void run('understand', () => api.understandGoal(input), (value) => { setAnswers({}); setUnderstanding(value); })}>
+            {busy === 'understand' ? 'Understanding…' : 'Understand my goal'}
+          </Button>
+          <Button variant="secondary" onClick={onManual}>Create a goal manually</Button>
+        </div>
+        {error && <p className="inline-error" role="alert">{error} You can continue manually.</p>}
+        {result && <p className="inline-success" role="status">{result}</p>}
+      </section>
+
+      {understanding && (
+        <section className="panel assistant-panel">
+          <span className="eyebrow">AI INTERPRETATION · NEEDS YOUR CONFIRMATION</span>
+          <h2>{understanding.outcome}</h2>
+          {understanding.knownFacts.length > 0 && <div><h3>Details I found in your description</h3><ul>{understanding.knownFacts.map((fact, i) => <li key={i}>{fact}</li>)}</ul></div>}
+          {understanding.successCriteria.length > 0 && <div><h3>Possible signs of success</h3><ul>{understanding.successCriteria.map((fact, i) => <li key={i}>{fact}</li>)}</ul></div>}
+          {understanding.assumptions.length > 0 && <div><h3>Assumptions to check</h3><ul>{understanding.assumptions.map((fact, i) => <li key={i}>{fact}</li>)}</ul></div>}
+          {understanding.questions.length > 0 && <div><h3>Questions that may change the plan</h3><div>{understanding.questions.map((question) => <label className="field" key={question.id}><span>{question.prompt}{question.required ? ' · required' : ' · optional'}</span>{question.answerType === 'CHOICE' ? <select aria-label={question.prompt} value={answers[question.id] ?? ''} onChange={(event) => setAnswers({ ...answers, [question.id]: event.target.value })}><option value="">Skip for now</option>{question.options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input aria-label={question.prompt} type={question.answerType === 'DATE' ? 'date' : question.answerType === 'NUMBER' ? 'number' : 'text'} value={answers[question.id] ?? ''} onChange={(event) => setAnswers({ ...answers, [question.id]: event.target.value })} /> }<small>{question.why}</small></label>)}</div></div>}
+          {understanding.missingInformation.length > 0 && <p className="muted">Still unknown: {understanding.missingInformation.join(' · ')}</p>}
+          <Button disabled={!!busy || understanding.questions.some((question) => question.required && !answers[question.id]?.trim())} onClick={() => void run('feasibility', () => api.assessGoalFeasibility(workflowInput()), setFeasibility)}>
+            {busy === 'feasibility' ? 'Checking…' : 'Review feasibility'}
+          </Button>
+        </section>
+      )}
+
+      {feasibility && (
+        <section className="panel assistant-panel">
+          <span className="eyebrow">FEASIBILITY · AI PROPOSAL</span>
+          <h2>{feasibility.assessment.replaceAll('_', ' ').toLowerCase()}</h2>
+          <p>{feasibility.summary}</p>
+          {feasibility.concerns.length > 0 && <div><h3>Things to consider</h3><ul>{feasibility.concerns.map((item, i) => <li key={i}>{item}</li>)}</ul></div>}
+          {feasibility.alternatives.length > 0 && <div><h3>Possible alternatives</h3><ul>{feasibility.alternatives.map((item, i) => <li key={i}>{item}</li>)}</ul></div>}
+          {feasibility.assumptions.length > 0 && <p className="muted">Assumptions: {feasibility.assumptions.join(' · ')}</p>}
+          <Button disabled={!!busy} onClick={() => void run('proposal', async () => {
+            const next = await api.proposeGoalStructure(workflowInput());
+            sessionStorage.setItem('flow-up.current-ai-proposal', next.id);
+            setSelected(next.proposalData.items.map((item) => item.id));
+            return next;
+          }, setProposal)}>{busy === 'proposal' ? 'Preparing proposal…' : 'Build a goal structure proposal'}</Button>
+        </section>
+      )}
+
+      {proposal && (
+        <section className="panel assistant-panel">
+          <span className="eyebrow">AI PROPOSAL · NOT SAVED</span>
+          <h2>Review the suggested structure</h2>
+          <p>{proposal.proposalData.summary}</p>
+          <p className="muted">Edit titles, choose items, or reject the proposal. Selected items are added only after you approve.</p>
+          <div className="assistant-proposal-list">
+            {proposal.proposalData.items.map((item) => {
+              const applied = proposal.proposalData.applicationResults?.some((entry) => entry.operation === item.id && entry.success);
+              return <label className="assistant-proposal-item" key={item.id}>
+                <input type="checkbox" checked={selected.includes(item.id)} disabled={!!busy || applied}
+                  onChange={(event) => setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} />
+                <span className="assistant-proposal-item__body">
+                  <span className="eyebrow">{item.type}{item.type === 'MEASUREMENT' ? ` · ${item.valueType ?? 'type needed'}${item.targetValue !== undefined && item.targetValue !== null ? ` · target ${item.targetValue}${item.unit ? ` ${item.unit}` : ''}` : ''}` : ''}{item.targetDate ? ` · ${item.targetDate}` : ''}{applied ? ' · SAVED' : ''}</span>
+                  <input aria-label={`Edit ${item.type.toLowerCase()} title`} value={item.title} disabled={!!busy || applied}
+                    onChange={(event) => updateProposalItem(item.id, { title: event.target.value })} />
+                  <small>{item.parentItemId ? `Under: ${proposal.proposalData.items.find((parent) => parent.id === item.parentItemId)?.title ?? 'parent item'} · ` : 'Root outcome · '}{item.description || item.rationale}</small>
+                </span>
+              </label>;
+            })}
+          </div>
+          <div className="heading-actions">
+            <Button disabled={!!busy || !selected.length} onClick={() => void apply()}>{busy === 'apply' ? 'Applying…' : proposal.status === 'PARTIALLY_APPROVED' ? 'Apply selected remaining items' : 'Approve selected items'}</Button>
+            <Button variant="secondary" disabled={!!busy} onClick={() => void reject()}>{busy === 'reject' ? 'Rejecting…' : 'Reject proposal'}</Button>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function GoalReviewPage({ goals, initialGoalId }: { goals: Goal[]; initialGoalId: string | null }) {
+  const [goalId, setGoalId] = useState(initialGoalId ?? goals[0]?.id ?? '');
+  const [refresh, setRefresh] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [data, setData] = useState<{
+    progress: ProgressSummary;
+    actions: Action[];
+    executions: Record<string, Execution | null>;
+    measurements: { measurement: Measurement; history: MeasurementRecord[] }[];
+    schedules: Schedule[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!goalId && goals.length) setGoalId(initialGoalId ?? goals[0].id);
+  }, [goalId, goals, initialGoalId]);
+
+  useEffect(() => {
+    if (!goalId) { setData(null); return; }
+    let active = true;
+    setLoading(true);
+    setError('');
+    const end = new Date();
+    const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
+    Promise.all([
+      api.progress(goalId),
+      api.actions(goalId),
+      api.measurements(goalId),
+      api.schedules(dateOnly(start), dateOnly(end)),
+    ]).then(async ([progress, actions, measurements, schedules]) => {
+      const [executionEntries, measurementEntries] = await Promise.all([
+        Promise.all(actions.filter((action) => !action.archivedAt).map(async (action) => [action.id, await api.execution(action.id)] as const)),
+        Promise.all(measurements.filter((measurement) => !measurement.archivedAt).map(async (measurement) => [measurement, await api.measurementHistory(measurement.id)] as const)),
+      ]);
+      if (!active) return;
+      setData({ progress, actions: actions.filter((action) => !action.archivedAt), executions: Object.fromEntries(executionEntries),
+        measurements: measurementEntries.map(([measurement, history]) => ({ measurement, history })), schedules });
+    }).catch((reason: unknown) => {
+      if (active) { setData(null); setError(messageOf(reason)); }
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [goalId, refresh]);
+
+  const selectedGoal = goals.find((goal) => goal.id === goalId);
+  return <div className="review-page">
+    <div className="review-page__toolbar">
+      <label className="field"><span>Goal</span><select aria-label="Review Goal" value={goalId} onChange={(event) => setGoalId(event.target.value)}>
+        {goals.map((goal) => <option key={goal.id} value={goal.id}>{goal.title}</option>)}
+      </select></label>
+      <Button variant="secondary" type="button" disabled={loading || !goalId} onClick={() => setRefresh((value) => value + 1)}>{loading ? 'Updating…' : 'Refresh evidence'}</Button>
+    </div>
+    {!goals.length ? <section className="panel"><h2>No Goals to review</h2><p>Create a Goal to see its execution and measurement evidence here.</p></section>
+      : error ? <section className="panel inline-error" role="alert">Review evidence could not be loaded: {error}</section>
+      : loading && !data ? <section className="panel"><p>Loading saved evidence…</p></section>
+      : data && <>
+        <section className="panel review-page__intro">
+          <span className="eyebrow">GOAL REVIEW · LAST 30 DAYS</span>
+          <h2>{selectedGoal?.title ?? 'Goal review'}</h2>
+          <p>Review recorded work and measurements. Outcome progress appears only when a calculation rule is configured.</p>
+        </section>
+        <div className="review-page__summary">
+          <article className="panel review-stat"><span>OUTCOME PROGRESS</span><strong>{data.progress.goalProgress.progressValue == null ? 'Not configured' : `${Math.round(data.progress.goalProgress.progressValue)}%`}</strong><small>{data.progress.goalProgress.calculationStatus.replaceAll('_', ' ').toLowerCase()}</small></article>
+          <article className="panel review-stat"><span>ACTIONS COMPLETE</span><strong>{data.progress.actionCompletion?.totalActions ? `${data.progress.actionCompletion.completedActions} / ${data.progress.actionCompletion.totalActions}` : 'No active Actions'}</strong><small>Completed work, separate from Goal outcome</small></article>
+          <article className="panel review-stat"><span>MEASUREMENTS WITH VALUES</span><strong>{data.measurements.filter((entry) => entry.history.length > 0).length} / {data.measurements.length}</strong><small>Saved records for this Goal</small></article>
+        </div>
+        <section className="panel review-section">
+          <div className="panel__heading"><h2>Planned and completed work</h2><span>{data.schedules.length} scheduled sessions in the period</span></div>
+          {data.actions.length ? <ul className="review-list">{data.actions.map((action) => {
+            const execution = data.executions[action.id];
+            const scheduled = data.schedules.filter((schedule) => schedule.actionId === action.id);
+            return <li key={action.id}><span className={`review-list__mark ${action.status === 'COMPLETED' ? 'review-list__mark--done' : ''}`}>{action.status === 'COMPLETED' ? '✓' : '·'}</span>
+              <div><strong>{action.title}</strong><small>{action.status.replaceAll('_', ' ').toLowerCase()}{scheduled.length ? ` · ${scheduled.length} planned session${scheduled.length === 1 ? '' : 's'}` : ''}</small>
+                {execution?.executionNote && <p>{execution.executionNote}</p>}
+                {execution?.actualCompletedAt && <small>Completed {dateLabel(execution.actualCompletedAt)}</small>}
+              </div></li>;
+          })}</ul> : <p className="empty-line">No Actions recorded for this Goal yet.</p>}
+        </section>
+        <section className="panel review-section">
+          <div className="panel__heading"><h2>Measurement history</h2><span>Recorded values, newest first</span></div>
+          {data.measurements.length ? data.measurements.map(({ measurement, history }) => <article className="review-measurement" key={measurement.id}>
+            <div><strong>{measurement.label}</strong><small>{measurement.targetValue === null ? 'No target' : `Target ${measurement.targetValue}${measurement.unit ? ` ${measurement.unit}` : ''}`}</small></div>
+            {history.length ? <ol>{history.slice(0, 5).map((record) => <li key={record.id}><strong>{record.value}{measurement.unit ? ` ${measurement.unit}` : ''}</strong><time>{dateLabel(record.recordedAt)}</time>{record.note && <small>{record.note}</small>}</li>)}</ol> : <p className="empty-line">No values recorded.</p>}
+          </article>) : <p className="empty-line">No Measurements for this Goal yet.</p>}
+        </section>
+      </>}
+  </div>;
+}
+
+export function App() {
+  const [user, setUser] = useState<UserContext | null>(null);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [baseDataLoaded, setBaseDataLoaded] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [hierarchy, setHierarchy] = useState<GoalNode[]>([]);
+  const [page, setPage] = useState<Page>('workspaces');
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [actions, setActions] = useState<Action[]>([]);
+  const [editingMilestone, setEditingMilestone] = useState<string | null>(null);
+  const [editingAction, setEditingAction] = useState<string | null>(null);
+  const [availableActions, setAvailableActions] = useState<Action[]>([]);
+  const [actionsLoaded, setActionsLoaded] = useState(false);
+  const [actionsLoadError, setActionsLoadError] = useState(false);
+  const [actionRefresh, setActionRefresh] = useState(0);
+  const [upcomingSchedules, setUpcomingSchedules] = useState<Schedule[]>([]);
+  const [schedulesLoaded, setSchedulesLoaded] = useState(false);
+  const [schedulesLoadError, setSchedulesLoadError] = useState(false);
+  const [scheduleRefresh, setScheduleRefresh] = useState(0);
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [measurementLoadState, setMeasurementLoadState] = useState<'LOADING' | 'READY' | 'ERROR'>('LOADING');
+  const [measurementRefresh, setMeasurementRefresh] = useState(0);
+  const [measurementHistory, setMeasurementHistory] = useState<Record<string, MeasurementRecord[]>>({});
+  const [measurementFormOpen, setMeasurementFormOpen] = useState(false);
+  const [measurementLabel, setMeasurementLabel] = useState('');
+  const [measurementType, setMeasurementType] = useState<Measurement['valueType']>('NUMBER');
+  const [measurementUnit, setMeasurementUnit] = useState('');
+  const [measurementTarget, setMeasurementTarget] = useState('');
+  const [measurementValues, setMeasurementValues] = useState<Record<string, string>>({});
+  const [editingMeasurement, setEditingMeasurement] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ProgressSummary | null>(null);
+  const [notice, setNotice] = useState<Notice>(null);
+  const [busy, setBusy] = useState(false);
+  const [booting, setBooting] = useState(Boolean(getStoredToken()));
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [modal, setModal] = useState<
+    'project' | 'goal' | 'child' | 'milestone' | 'action' | 'execution' | null
+  >(null);
+  const [executionAction, setExecutionAction] = useState<Action | null>(null);
+  const [executionData, setExecutionData] = useState<Execution | null>(null);
+  const [planningDate] = useState(today());
+
+  const notify = useCallback((next: Notice) => {
+    setNotice(next);
+    if (next) window.setTimeout(() => setNotice(null), 4800);
+  }, []);
+  const handleError = useCallback(
+    (error: unknown) => {
+      if (error instanceof ApiError && error.status === 401) {
+        clearToken();
+        setUser(null);
+        setWorkspace(null);
+      }
+      notify({ kind: 'error', text: messageOf(error) });
+    },
+    [notify],
+  );
+
+  const loadBase = useCallback(async () => {
+    setBaseDataLoaded(false);
+    let overview: Awaited<ReturnType<typeof api.workspaceOverview>>;
+    try {
+      overview = await api.workspaceOverview();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        setWorkspace(null);
+        setProjects([]);
+        setGoals([]);
+        setHierarchy([]);
+        return null;
+      }
+      throw error;
+    }
+    setWorkspace(overview.workspace);
+    setProjects(overview.projects);
+    const [nextGoals, nextHierarchy] = await Promise.all([
+      api.goals(),
+      api.hierarchy(),
+    ]);
+    setGoals(nextGoals);
+    setHierarchy(nextHierarchy);
+    setBaseDataLoaded(true);
+    setSelectedProject((current) =>
+      current
+        ? (overview.projects.find((item) => item.id === current.id) ?? null)
+        : null,
+    );
+    setSelectedGoal((current) =>
+      current
+        ? (nextGoals.find((item) => item.id === current.id) ?? null)
+        : null,
+    );
+    return overview;
+  }, []);
+
+  const refreshWorkspaces = useCallback(async () => {
+    const result = await api.workspaces();
+    setWorkspaces(result);
+    return result;
+  }, []);
+
+  const openWorkspace = useCallback(async (selected: Workspace) => {
+    saveWorkspaceId(selected.id);
+    setWorkspace(selected);
+    setActionRefresh((value) => value + 1);
+    setScheduleRefresh((value) => value + 1);
+    setSelectedProject(null);
+    setSelectedGoal(null);
+    setWorkspaceBusy(true);
+    try {
+      await loadBase();
+      setPage('home');
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [handleError, loadBase]);
+
+  useEffect(() => {
+    if (!getStoredToken()) return;
+    let active = true;
+    (async () => {
+      try {
+        const result = await api.session();
+        if (!active) return;
+        setUser(result.user);
+        setPage('workspaces');
+        const available = await refreshWorkspaces();
+        const selectedId = getStoredWorkspaceId();
+        if (selectedId && !available.some((item) => item.id === selectedId)) saveWorkspaceId(null);
+      } catch (error) {
+        if (active) {
+          clearToken();
+          handleError(error);
+        }
+      } finally {
+        if (active) setBooting(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [handleError, refreshWorkspaces]);
+
+  useEffect(() => {
+    if (!user || !selectedGoal) {
+      setMilestones([]);
+      setActions([]);
+      setProgress(null);
+      return;
+    }
+    let active = true;
+    (async () => {
+      try {
+        const [nextMilestones, nextActions, nextProgress] = await Promise.all([
+          api.milestones(selectedGoal.id),
+          api.actions(selectedGoal.id),
+          api.progress(selectedGoal.id),
+        ]);
+        if (active) {
+          setMilestones(nextMilestones);
+          setActions(nextActions);
+          setProgress(nextProgress);
+        }
+      } catch (error) {
+        if (active) handleError(error);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [user, selectedGoal, actionRefresh, handleError]);
+
+  useEffect(() => {
+    if (!user || !selectedGoal) {
+      setMeasurements([]);
+      setMeasurementHistory({});
+      setMeasurementLoadState('READY');
+      return;
+    }
+    let active = true;
+    setMeasurements([]);
+    setMeasurementLoadState('LOADING');
+    (async () => {
+      try {
+        const next = await api.measurements(selectedGoal.id);
+        const histories = await Promise.all(next.map(async (measurement) => [
+          measurement.id, await api.measurementHistory(measurement.id),
+        ] as const));
+        if (active) {
+          setMeasurements(next);
+          setMeasurementHistory(Object.fromEntries(histories));
+          setMeasurementLoadState('READY');
+        }
+      } catch (error) {
+        if (active) { setMeasurementLoadState('ERROR'); handleError(error); }
+      }
+    })();
+    return () => { active = false; };
+  }, [user, selectedGoal, measurementRefresh, handleError]);
+
+  useEffect(() => {
+    if (page !== 'home' || !user) return;
+    let active = true;
+    setSchedulesLoaded(false);
+    setSchedulesLoadError(false);
+    const end = new Date(`${today()}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() + 7);
+    api.schedules(today(), end.toISOString().slice(0, 10)).then((items) => {
+      if (active) { setUpcomingSchedules(items.sort((a, b) => a.startAt.localeCompare(b.startAt))); setSchedulesLoaded(true); }
+    }).catch((error) => { if (active) { setSchedulesLoadError(true); handleError(error); } });
+    return () => { active = false; };
+  }, [page, user, scheduleRefresh, handleError]);
+
+  useEffect(() => {
+    if (!['planning', 'home'].includes(page) || !user) {
+      setAvailableActions([]);
+      setActionsLoaded(false);
+      setActionsLoadError(false);
+      return;
+    }
+    if (goals.length === 0) {
+      setAvailableActions([]);
+      setActionsLoaded(true);
+      setActionsLoadError(false);
+      return;
+    }
+    let active = true;
+    setActionsLoaded(false);
+    setActionsLoadError(false);
+    Promise.all(goals.map((goal) => api.actions(goal.id)))
+      .then((lists) => {
+        if (active) {
+          setAvailableActions(lists.flat());
+          setActionsLoaded(true);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setAvailableActions([]);
+          setActionsLoadError(true);
+          handleError(error);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [page, user, goals, actionRefresh, handleError]);
+
+  const displayedGoals = selectedProject
+    ? goals.filter((goal) => goal.projectId === selectedProject.id)
+    : goals;
+  const visibleHierarchy = useMemo(() => {
+    if (!selectedProject) return hierarchy;
+    return hierarchy
+      .map((node) => node)
+      .filter((node) => node.goal.projectId === selectedProject.id);
+  }, [hierarchy, selectedProject]);
+  const nextAction = availableActions.find((action) => action.status === 'IN_PROGRESS')
+    ?? availableActions.find((action) => action.status === 'TODO');
+  const nextSchedule = upcomingSchedules[0];
+
+  async function authenticated(userContext: UserContext) {
+    setUser(userContext);
+    try {
+      saveWorkspaceId(null);
+      setWorkspace(null);
+      setPage('workspaces');
+      await refreshWorkspaces();
+      notify({
+        kind: 'success',
+        text: 'You’re signed in. Choose a workspace or create one to get started.',
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  async function createWorkspace() {
+    const name = workspaceName.trim();
+    if (!name) return;
+    setWorkspaceBusy(true);
+    try {
+      const created = await api.createWorkspace(name);
+      setWorkspaceName('');
+      setShowCreateWorkspace(false);
+      const updated = await refreshWorkspaces();
+      setWorkspaces(updated);
+      notify({ kind: 'success', text: `${created.name} created.` });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function deleteWorkspace(selected: Workspace) {
+    const confirmed = window.confirm(`Delete “${selected.name}” and all of its Projects, Goals, Actions, schedules, and measurements? This cannot be undone.`);
+    if (!confirmed) return;
+    setWorkspaceBusy(true);
+    try {
+      await api.deleteWorkspace(selected.id);
+      if (getStoredWorkspaceId() === selected.id) {
+        saveWorkspaceId(null);
+        setWorkspace(null);
+        setProjects([]);
+        setGoals([]);
+        setHierarchy([]);
+        setSelectedProject(null);
+        setSelectedGoal(null);
+        setAvailableActions([]);
+        setUpcomingSchedules([]);
+        setPage('workspaces');
+      }
+      await refreshWorkspaces();
+      notify({ kind: 'success', text: `${selected.name} deleted.` });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      await api.logout();
+    } catch {
+      /* Local token disposal still completes sign out. */
+    }
+    clearToken();
+    setUser(null);
+    setWorkspace(null);
+    setBaseDataLoaded(false);
+    setProjects([]);
+    setGoals([]);
+    setSelectedGoal(null);
+    setSelectedProject(null);
+    setPage('home');
+    setWorkspaces([]);
+  }
+
+  async function submitProject(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    try {
+      const project = await api.createProject({
+        name: String(data.get('name')).trim(),
+        description: String(data.get('description')).trim() || undefined,
+      });
+      await loadBase();
+      setSelectedProject(project);
+      setPage('goals');
+      setModal(null);
+      notify({ kind: 'success', text: 'Project created.' });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitGoal(event: FormEvent<HTMLFormElement>, child = false) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const body = {
+      title: String(data.get('title')).trim(),
+      description: String(data.get('description')).trim() || undefined,
+      targetDate: String(data.get('targetDate')) || null,
+    };
+    setBusy(true);
+    try {
+      const result =
+        child && selectedGoal
+          ? await api.createChildGoal(selectedGoal.id, body)
+          : await api.createGoal({
+              ...body,
+              projectId: selectedProject?.id ?? null,
+            });
+      await loadBase();
+      setSelectedGoal(result);
+      setModal(null);
+      notify({
+        kind: 'success',
+        text: child ? 'Child goal created.' : 'Goal created.',
+      });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitMilestone(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedGoal) return;
+    const data = new FormData(event.currentTarget);
+    setBusy(true);
+    try {
+      const created = await api.createMilestone({
+        goalId: selectedGoal.id,
+        title: String(data.get('title')).trim(),
+        description: String(data.get('description')).trim() || undefined,
+        targetDate: String(data.get('targetDate')) || null,
+      });
+      setMilestones((items) => [...items, created]);
+      setModal(null);
+      notify({ kind: 'success', text: 'Milestone added.' });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitAction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedGoal) return;
+    const data = new FormData(event.currentTarget);
+    const milestoneId = String(data.get('milestoneId') || '');
+    setBusy(true);
+    try {
+      const created = await api.createAction({
+        goalId: selectedGoal.id,
+        milestoneId: milestoneId || null,
+        title: String(data.get('title')).trim(),
+        description: String(data.get('description')).trim() || undefined,
+      });
+      setActions((items) => [...items, created]);
+      setModal(null);
+      notify({ kind: 'success', text: 'Action added.' });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitMeasurement(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedGoal) return;
+    let targetValue: number | string | boolean | null = null;
+    if (measurementTarget.trim()) {
+      targetValue = measurementType === 'NUMBER' ? Number(measurementTarget) : measurementType === 'BOOLEAN' ? measurementTarget === 'true' : measurementTarget;
+      if (typeof targetValue === 'number' && !Number.isFinite(targetValue)) {
+        notify({ kind: 'error', text: 'Enter a valid numeric target.' });
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      const created = await api.createMeasurement({
+        goalId: selectedGoal.id,
+        label: measurementLabel.trim(),
+        valueType: measurementType,
+        unit: measurementType === 'NUMBER' ? measurementUnit.trim() || null : null,
+        targetValue: measurementTarget.trim() ? targetValue : null,
+      });
+      setMeasurements((items) => [...items, created]);
+      setMeasurementHistory((items) => ({ ...items, [created.id]: [] }));
+      setMeasurementLabel('');
+      setMeasurementUnit('');
+      setMeasurementTarget('');
+      setMeasurementFormOpen(false);
+      notify({ kind: 'success', text: 'Measurement added.' });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function recordMeasurementValue(measurement: Measurement) {
+    const raw = measurementValues[measurement.id]?.trim();
+    if (raw === undefined || raw === '') return;
+    const value = measurement.valueType === 'NUMBER'
+      ? Number(raw)
+      : measurement.valueType === 'BOOLEAN'
+        ? raw === 'true'
+        : raw;
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      notify({ kind: 'error', text: 'Enter a valid number.' });
+      return;
+    }
+    try {
+      const record = await api.recordMeasurement(measurement.id, { value });
+      setMeasurementHistory((items) => ({
+        ...items,
+        [measurement.id]: [record, ...(items[measurement.id] ?? [])],
+      }));
+      setMeasurementValues((items) => ({ ...items, [measurement.id]: '' }));
+      notify({ kind: 'success', text: 'Value recorded.' });
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  async function saveMilestoneEdit(event: FormEvent<HTMLFormElement>, milestone: Milestone) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      const updated = await api.updateMilestone(milestone.id, {
+        title: String(data.get('title')).trim(),
+        targetDate: String(data.get('targetDate') ?? '') || null,
+      });
+      setMilestones((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setEditingMilestone(null);
+    } catch (error) { handleError(error); }
+  }
+
+  async function saveActionEdit(event: FormEvent<HTMLFormElement>, action: Action) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      const updated = await api.updateAction(action.id, {
+        title: String(data.get('title')).trim(),
+        description: String(data.get('description') ?? '').trim() || null,
+      });
+      setActions((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setEditingAction(null);
+    } catch (error) { handleError(error); }
+  }
+
+  async function submitMeasurementEdit(event: FormEvent<HTMLFormElement>, measurement: Measurement) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const target = String(data.get('targetValue') ?? '').trim();
+    const targetValue = target ? (measurement.valueType === 'NUMBER' ? Number(target) : measurement.valueType === 'BOOLEAN' ? target === 'true' : target) : null;
+    if (typeof targetValue === 'number' && !Number.isFinite(targetValue)) {
+      notify({ kind: 'error', text: 'Enter a valid numeric target.' });
+      return;
+    }
+    try {
+      const updated = await api.updateMeasurement(measurement.id, {
+        label: String(data.get('label')).trim(),
+        unit: measurement.valueType === 'NUMBER' ? String(data.get('unit') ?? '').trim() || null : null,
+        targetValue,
+      });
+      setMeasurements((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setEditingMeasurement(null);
+      notify({ kind: 'success', text: 'Measurement updated.' });
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  async function updateAction(action: Action, status: ActionStatus) {
+    try {
+      const updated = await api.updateActionStatus(action.id, status);
+      setActions((items) =>
+        items.map((item) => (item.id === action.id ? updated : item)),
+      );
+      const summary = await api.progress(action.goalId);
+      setProgress(summary);
+      notify({ kind: 'success', text: 'Action status updated.' });
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  async function openExecution(action: Action) {
+    setExecutionAction(action);
+    setExecutionData(null);
+    setModal('execution');
+    try {
+      setExecutionData(await api.execution(action.id));
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  async function submitExecution(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!executionAction) return;
+    const data = new FormData(event.currentTarget);
+    const startedAt = String(data.get('actualStartedAt') || '');
+    const completedAt = String(data.get('actualCompletedAt') || '');
+    setBusy(true);
+    try {
+      await api.recordExecution(executionAction.id, {
+        actualStartedAt: startedAt ? new Date(startedAt).toISOString() : null,
+        actualCompletedAt: completedAt
+          ? new Date(completedAt).toISOString()
+          : null,
+        executionNote: String(data.get('executionNote')).trim() || null,
+      });
+      setModal(null);
+      notify({ kind: 'success', text: 'Execution details saved.' });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function completeMilestone(milestone: Milestone) {
+    try {
+      const updated = await api.completeMilestone(milestone.id);
+      setMilestones((items) =>
+        items.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      notify({ kind: 'success', text: 'Milestone completed.' });
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  if (booting)
+    return (
+      <div className="boot-screen">
+        <Loading label="Restoring your session" />
+      </div>
+    );
+  if (!user)
+    return (
+      <>
+        <AuthScreen onAuthenticated={authenticated} notify={notify} />
+        {notice && (
+          <div className={`toast toast--${notice.kind}`} role="status">
+            {notice.text}
+          </div>
+        )}
+      </>
+    );
+
+  const pageTitle =
+    page === 'workspaces'
+      ? 'Your workspaces'
+      : page === 'home'
+      ? 'Your space to grow'
+      : page === 'projects'
+        ? 'Projects'
+        : page === 'goals'
+          ? 'Goals & milestones'
+          : page === 'assistant'
+            ? 'Goal discovery'
+            : page === 'review' ? 'Review your progress' : 'Plan your day';
+  const pageSubtitle =
+    page === 'workspaces'
+      ? 'Create separate spaces for different parts of your work, then open the one you want to focus on.'
+      : page === 'home'
+      ? 'A little progress adds up to a lot.'
+      : page === 'projects'
+        ? 'Shape your ideas into focused projects.'
+        : page === 'goals'
+          ? 'Keep your bigger picture close.'
+          : page === 'assistant'
+            ? 'Turn an intention into a plan you can review and shape.'
+            : page === 'review' ? 'See what happened, what you measured, and what remains unknown.' : 'Make time for the work that matters.';
+
+  return (
+    <div className="app-layout">
+      <Sidebar
+        page={page}
+        setPage={setPage}
+        user={user}
+        workspace={workspace}
+        onLogout={logout}
+        mobileOpen={mobileOpen}
+        closeMobile={() => setMobileOpen(false)}
+      />
+      <main className="main-area">
+        <header className="topbar">
+          <button
+            className="menu-toggle"
+            aria-label="Open menu"
+            onClick={() => setMobileOpen(true)}
+          >
+            ☰
+          </button>
+          <div className="breadcrumbs">
+            <span>Workspace</span>
+            <b>/</b>
+            <strong>
+              {page === 'goals' && selectedProject
+                ? selectedProject.name
+                : pageTitle}
+            </strong>
+          </div>
+          <div className="topbar__right">
+            <span className="topbar-date">
+              {new Date().toLocaleDateString(undefined, {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+              })}
+            </span>
+            <span className="avatar avatar--small">{initials(user.email)}</span>
+          </div>
+        </header>
+        <section className="page-content">
+          <div className="page-heading">
+            <div>
+              <span className="eyebrow">
+                {page === 'workspaces' ? 'A CLEAN START' : page === 'home' ? 'MONDAY MOMENTUM' : 'YOUR WORKSPACE'}
+              </span>
+              <h1>{pageTitle}</h1>
+              <p>{pageSubtitle}</p>
+            </div>
+            {page === 'projects' && (
+              <Button onClick={() => setModal('project')}>
+                <span>＋</span> New project
+              </Button>
+            )}
+            {page === 'goals' && (
+              <div className="heading-actions">
+                <select
+                  aria-label="Filter by project"
+                  value={selectedProject?.id ?? ''}
+                  onChange={(event) => {
+                    const project =
+                      projects.find((item) => item.id === event.target.value) ??
+                      null;
+                    setSelectedProject(project);
+                    setSelectedGoal(null);
+                  }}
+                >
+                  <option value="">All projects</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+                <Button onClick={() => setModal('goal')}>
+                  <span>＋</span> New goal
+                </Button>
+              </div>
+            )}
+            {page === 'assistant' && (
+              <Button variant="secondary" onClick={() => setPage('goals')}>
+                Continue manually
+              </Button>
+            )}
+          </div>
+
+          {page === 'workspaces' && (
+            <section className="workspace-manager" aria-label="Workspace manager">
+              <div className="workspace-manager__create-trigger">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    setWorkspaceName('');
+                    setShowCreateWorkspace(true);
+                  }}
+                >
+                  + Create workspace
+                </Button>
+              </div>
+
+              {showCreateWorkspace && (
+                <Modal
+                  title="Create a workspace"
+                  onClose={() => {
+                    if (workspaceBusy) return;
+                    setShowCreateWorkspace(false);
+                    setWorkspaceName('');
+                  }}
+                >
+                  <form
+                    className="form-stack"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void createWorkspace();
+                    }}
+                  >
+                    <p className="muted">
+                      Keep personal goals, a team initiative, or a side project in its own space.
+                    </p>
+                    <Field
+                      label="Workspace name"
+                      value={workspaceName}
+                      maxLength={80}
+                      placeholder="For example, Personal goals"
+                      autoFocus
+                      onChange={(event) => setWorkspaceName(event.target.value)}
+                    />
+                    <div className="heading-actions">
+                      <Button
+                        type="submit"
+                        disabled={workspaceBusy || !workspaceName.trim()}
+                      >
+                        {workspaceBusy ? 'Creating…' : 'Create workspace'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={workspaceBusy}
+                        onClick={() => {
+                          setShowCreateWorkspace(false);
+                          setWorkspaceName('');
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                </Modal>
+              )}
+
+              <div className="workspace-manager__heading">
+                <h2>Your spaces</h2>
+                <span>
+                  {workspaces.length}{' '}
+                  {workspaces.length === 1 ? 'workspace' : 'workspaces'}
+                </span>
+              </div>
+
+              {workspaces.length ? (
+                <div className="workspace-manager__grid">
+                  {workspaces.map((item) => (
+                    <article className="workspace-manager__item" key={item.id}>
+                      <span className="workspace-manager__mark">⌂</span>
+                      <div className="workspace-manager__details">
+                        <h3>{item.name}</h3>
+                        <p>
+                          Created {dateLabel(item.createdAt.slice(0, 10))}
+                          {workspace?.id === item.id ? ' · currently open' : ''}
+                        </p>
+                      </div>
+                      <div className="workspace-manager__actions">
+                        <Button
+                          variant={workspace?.id === item.id ? 'secondary' : 'primary'}
+                          disabled={workspaceBusy}
+                          onClick={() => void openWorkspace(item)}
+                        >
+                          {workspace?.id === item.id ? 'Open again' : 'Open workspace'}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          disabled={workspaceBusy}
+                          onClick={() => void deleteWorkspace(item)}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="workspace-manager__empty">
+                  <span>⌂</span>
+                  <h3>A clean start</h3>
+                  <p>Create a workspace when you are ready. Your goals and projects will live inside it.</p>
+                </div>
+              )}
+            </section>
+          )}
+
+          {page === 'assistant' && (
+            <GoalAssistantPage
+              onApplied={async () => {
+                await loadBase();
+                setPage('goals');
+                notify({ kind: 'success', text: 'Approved goal structure added to your workspace.' });
+              }}
+              onManual={() => setPage('goals')}
+            />
+          )}
+
+          {page === 'review' && <GoalReviewPage goals={goals} initialGoalId={selectedGoal?.id ?? null} />}
+
+          {page === 'home' && (
+  <DashboardHome
+    email={user.email}
+    goals={goals}
+    projects={projects}
+    actions={availableActions}
+    nextAction={nextAction}
+    nextSchedule={nextSchedule}
+    baseDataLoaded={baseDataLoaded}
+    actionsLoaded={actionsLoaded}
+    actionsLoadError={actionsLoadError}
+    schedulesLoaded={schedulesLoaded}
+    schedulesLoadError={schedulesLoadError}
+    onNewGoal={() => {
+      setSelectedProject(null);
+      setSelectedGoal(null);
+      setPage('goals');
+      setModal('goal');
+    }}
+    onNewProject={() => setModal('project')}
+    onOpenGoal={(goal) => {
+      setSelectedProject(
+        projects.find((project) => project.id === goal.projectId) ?? null,
+      );
+      setSelectedGoal(goal);
+      setPage('goals');
+    }}
+    onOpenProject={(project) => {
+      setSelectedProject(project);
+      setSelectedGoal(null);
+      setPage('goals');
+    }}
+    onOpenExecution={(action) => {
+      void openExecution(action);
+    }}
+    onOpenPlanning={() => setPage('planning')}
+    onRetryActions={() => setActionRefresh((value) => value + 1)}
+    onRetrySchedules={() => setScheduleRefresh((value) => value + 1)}
+    onViewGoals={() => {
+      setSelectedProject(null);
+      setPage('goals');
+    }}
+    onViewProjects={() => setPage('projects')}
+  />
+)}
+
+          {page === 'projects' && (
+            <section className="project-grid">
+              {projects.length ? (
+                projects.map((project, index) => (
+                  <button
+                    className="project-card"
+                    key={project.id}
+                    onClick={() => {
+                      setSelectedProject(project);
+                      setPage('goals');
+                    }}
+                  >
+                    <span
+                      className={`project-card__art project-card__art--${index % 3}`}
+                    >
+                      <span>{project.name.slice(0, 1).toUpperCase()}</span>
+                    </span>
+                    <span className="project-card__content">
+                      <strong>{project.name}</strong>
+                      <small>
+                        {project.description || 'No description yet'}
+                      </small>
+                      <span className="project-card__footer">
+                        {goals.filter((goal) => goal.projectId === project.id).length} Goals <b>·</b> Open project <b>→</b>
+                      </span>
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <div className="empty-wide">
+                  <EmptyState
+                    icon="▦"
+                    title="Every big thing starts somewhere"
+                    body="Create your first project and start building momentum."
+                    action={
+                      <Button onClick={() => setModal('project')}>
+                        Create your first project
+                      </Button>
+                    }
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
+          {page === 'goals' && (
+            <div className="goals-layout">
+              <section className="panel hierarchy-panel">
+                <div className="panel__heading">
+                  <div>
+                    <h2>Goal map</h2>
+                    <p>
+                      {selectedProject
+                        ? selectedProject.name
+                        : 'All goals across your workspace'}
+                    </p>
+                  </div>
+                  <span className="count-pill">
+                    {displayedGoals.length} goals
+                  </span>
+                </div>
+                {visibleHierarchy.length ? (
+                  <div className="goal-tree">
+                    <GoalTree
+                      nodes={visibleHierarchy}
+                      selectedId={selectedGoal?.id ?? null}
+                      onSelect={setSelectedGoal}
+                    />
+                  </div>
+                ) : (
+                  <EmptyState
+                    icon="◎"
+                    title="Your goal map is waiting"
+                    body={
+                      selectedProject
+                        ? 'Add a goal to this project to get started.'
+                        : 'Create a project, then add a goal to bring your plans to life.'
+                    }
+                    action={
+                      <Button
+                        onClick={() =>
+                          selectedProject
+                            ? setModal('goal')
+                            : setPage('projects')
+                        }
+                      >
+                        {selectedProject ? 'Add a goal' : 'Explore projects'}
+                      </Button>
+                    }
+                  />
+                )}
+              </section>
+              <section className="goal-detail">
+                {selectedGoal ? (
+                  <>
+                    <div className="goal-detail__header">
+                      <div>
+                        <span className="eyebrow">GOAL DETAILS</span>
+                        <h2>{selectedGoal.title}</h2>
+                      </div>
+                      <span
+                        className={`status-badge status-badge--${selectedGoal.status.toLowerCase()}`}
+                      >
+                        {selectedGoal.status.replaceAll('_', ' ').toLowerCase()}
+                      </span>
+                    </div>
+                    <p className="goal-description">
+                      {selectedGoal.description ||
+                        'Add detail to keep the reason behind this goal close.'}
+                    </p>
+                    <div className="goal-meta">
+                      <span>◷ {dateLabel(selectedGoal.targetDate)}</span>
+                      <span>
+                        ▦{' '}
+                        {projects.find(
+                          (item) => item.id === selectedGoal.projectId,
+                        )?.name ?? 'Workspace goal'}
+                      </span>
+                    </div>
+                    <div className="progress-block">
+                      <div className="progress-block__heading">
+                        <strong>Outcome progress</strong>
+                        <span>
+                          {!progress
+                            ? 'Loading'
+                            : progress.goalProgress.progressValue == null
+                            ? progress.goalProgress.calculationStatus === 'RULE_NOT_CONFIGURED'
+                              ? 'Not configured'
+                              : 'Not enough data'
+                            : `${Math.round(progress.goalProgress.progressValue)}%`}
+                        </span>
+                      </div>
+                      {progress?.goalProgress.progressValue != null && <div className="progress-track"><span style={{ width: `${Math.max(0, Math.min(100, progress.goalProgress.progressValue))}%` }} /></div>}
+                      {progress?.actionCompletion?.totalActions ? <div className="progress-block__execution">
+                        <div className="progress-block__heading"><span>Actions complete</span><strong>{progress.actionCompletion.completedActions} / {progress.actionCompletion.totalActions}</strong></div>
+                        <div className="progress-track"><span style={{ width: `${progress.actionCompletion.completionValue ?? 0}%` }} /></div>
+                      </div> : <small>{progress ? 'No actions to count yet.' : 'Loading progress…'}</small>}
+                    </div>
+                    <div className="detail-actions">
+                      <Button
+                        variant="secondary"
+                        onClick={() => setModal('child')}
+                      >
+                        ＋ Add child goal
+                      </Button>
+                      <Button
+                        variant="quiet"
+                        onClick={() => setModal('milestone')}
+                      >
+                        ＋ Milestone
+                      </Button>
+                      <Button
+                        variant="quiet"
+                        onClick={() => setModal('action')}
+                      >
+                        ＋ Action
+                      </Button>
+                    </div>
+                    <div className="detail-section">
+                      <div className="section-heading">
+                        <h3>Milestones</h3>
+                        <span>{milestones.length}</span>
+                      </div>
+                      {milestones.length ? (
+                        milestones.map((milestone) => (
+                          <div className="milestone-item" key={milestone.id}><div className="item-row">
+                            <span
+                              className={`check-circle ${milestone.status === 'COMPLETED' ? 'check-circle--done' : ''}`}
+                            >
+                              {milestone.status === 'COMPLETED' ? '✓' : ''}
+                            </span>
+                            <span className="item-row__body">
+                              <strong>{milestone.title}</strong>
+                              <small>
+                                {milestone.targetDate
+                                  ? dateLabel(milestone.targetDate)
+                                  : milestone.status.toLowerCase()}
+                              </small>
+                            </span>
+                            {milestone.status !== 'COMPLETED' && <button type="button" className="text-link" onClick={() => setEditingMilestone(editingMilestone === milestone.id ? null : milestone.id)}>{editingMilestone === milestone.id ? 'Close' : 'Edit'}</button>}
+                            {milestone.status !== 'COMPLETED' && <button type="button" className="text-link" onClick={() => completeMilestone(milestone)}>Complete</button>}
+                          </div>
+                          {editingMilestone === milestone.id && <form className="measurement-form" onSubmit={(event) => void saveMilestoneEdit(event, milestone)}><Field label="Milestone" name="title" defaultValue={milestone.title} required /><Field label="Target date" name="targetDate" type="date" defaultValue={milestone.targetDate ?? ''} /><Button>Save milestone</Button></form>}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="empty-line">No milestones yet.</p>
+                      )}
+                    </div>
+                    <div className="detail-section">
+                      <div className="section-heading">
+                        <h3>Actions</h3>
+                        <span>{actions.length}</span>
+                      </div>
+                      {actions.length ? (
+                        actions.map((action) => (
+                          <div className="action-item" key={action.id}><div className="action-row">
+                            <span className="action-row__mark">
+                              {action.status === 'COMPLETED' ? '✓' : '↗'}
+                            </span>
+                            <span className="item-row__body">
+                              <strong>{action.title}</strong>
+                              <small>
+                                {action.status
+                                  .replaceAll('_', ' ')
+                                  .toLowerCase()}
+                                {action.milestoneId
+                                  ? ` · ${milestones.find((item) => item.id === action.milestoneId)?.title ?? 'Milestone'}`
+                                  : ''}
+                              </small>
+                            </span>
+                            {action.status !== 'COMPLETED' && <button
+                              type="button"
+                              className="text-link"
+                              onClick={() => setEditingAction(editingAction === action.id ? null : action.id)}
+                            >
+                              {editingAction === action.id ? 'Close' : 'Edit'}
+                            </button>}
+                            <button
+                              type="button"
+                              className="text-link execution-link"
+                              onClick={() => openExecution(action)}
+                            >
+                              Log
+                            </button>
+                            {action.status !== 'COMPLETED' && (
+                              <select
+                                aria-label={`Update ${action.title} status`}
+                                value={action.status}
+                                onChange={(event) =>
+                                  updateAction(
+                                    action,
+                                    event.target.value as ActionStatus,
+                                  )
+                                }
+                              >
+                                <option value="TODO">To do</option>
+                                <option value="IN_PROGRESS">In progress</option>
+                                <option value="COMPLETED">Completed</option>
+                              </select>
+                            )}
+                          </div>
+                          {editingAction === action.id && action.status !== 'COMPLETED' && <form className="measurement-form" onSubmit={(event) => void saveActionEdit(event, action)}><Field label="Action" name="title" defaultValue={action.title} required /><label className="field"><span>Details</span><textarea name="description" defaultValue={action.description ?? ''} rows={2} /></label><Button>Save action</Button></form>}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="empty-line">
+                          No actions yet. Add a small next step.
+                        </p>
+                      )}
+                    </div>
+                    <div className="detail-section">
+                      <div className="section-heading">
+                        <h3>Measurements</h3>
+                        <Button type="button" variant="quiet" onClick={() => setMeasurementFormOpen((open) => !open)}>
+                          {measurementFormOpen ? 'Cancel' : '+ Add'}
+                        </Button>
+                      </div>
+                      {measurementFormOpen && (
+                        <form className="measurement-form" onSubmit={(event) => void submitMeasurement(event)}>
+                          <Field label="What will you measure?" value={measurementLabel} onChange={(event) => setMeasurementLabel(event.target.value)} maxLength={120} required />
+                          <label className="field"><span>Value type</span><select value={measurementType} onChange={(event) => setMeasurementType(event.target.value as Measurement['valueType'])}><option value="NUMBER">Number</option><option value="TEXT">Text</option><option value="BOOLEAN">Yes / No</option></select></label>
+                          {measurementType === 'NUMBER' && <Field label="Unit (optional)" value={measurementUnit} onChange={(event) => setMeasurementUnit(event.target.value)} placeholder="e.g. hours, kg" />}
+                          {measurementType === 'BOOLEAN' ? <label className="field"><span>Target (optional)</span><select value={measurementTarget} onChange={(event) => setMeasurementTarget(event.target.value)}><option value="">No target</option><option value="true">Yes</option><option value="false">No</option></select></label> : <Field label="Target (optional)" type={measurementType === 'NUMBER' ? 'number' : 'text'} value={measurementTarget} onChange={(event) => setMeasurementTarget(event.target.value)} />}
+                          <Button disabled={busy || !measurementLabel.trim()}>Save measurement</Button>
+                        </form>
+                      )}
+                      {measurementLoadState === 'LOADING' ? <p className="empty-line">Loading measurements…</p> : measurementLoadState === 'ERROR' ? <div className="inline-error" role="alert">Measurements could not be loaded. <button type="button" className="text-link" onClick={() => setMeasurementRefresh((value) => value + 1)}>Try again</button></div> : measurements.length === 0 ? <p className="empty-line">No measurements yet.</p> : measurements.map((measurement) => {
+                        const history = measurementHistory[measurement.id] ?? [];
+                        const current = history[0];
+                        return (
+                          <article className="measurement-card" key={measurement.id}>
+                            <div className="measurement-card__heading">
+                              <div><strong>{measurement.label}</strong><small>{measurement.unit ?? measurement.valueType.toLowerCase()}{measurement.targetValue !== null ? ` · Target ${measurement.targetValue}${measurement.unit ? ` ${measurement.unit}` : ''}` : ' · No target'}</small></div>
+                              <button type="button" className="text-link" onClick={() => setEditingMeasurement(editingMeasurement === measurement.id ? null : measurement.id)}>{editingMeasurement === measurement.id ? 'Close' : 'Edit'}</button>
+                            </div>
+                            {editingMeasurement === measurement.id && (
+                              <form className="measurement-form" onSubmit={(event) => void submitMeasurementEdit(event, measurement)}>
+                                <Field label="Name" name="label" defaultValue={measurement.label} maxLength={120} required />
+                                {measurement.valueType === 'NUMBER' && <Field label="Unit" name="unit" defaultValue={measurement.unit ?? ''} />}
+                                {measurement.valueType === 'BOOLEAN' ? <label className="field"><span>Target</span><select name="targetValue" defaultValue={measurement.targetValue === null ? '' : String(measurement.targetValue)}><option value="">No target</option><option value="true">Yes</option><option value="false">No</option></select></label> : <Field label="Target" name="targetValue" type={measurement.valueType === 'NUMBER' ? 'number' : 'text'} defaultValue={measurement.targetValue === null ? '' : String(measurement.targetValue)} />}
+                                <Button>Save changes</Button>
+                              </form>
+                            )}
+                            <div className="measurement-card__current"><span>Latest recorded</span><strong>{current ? `${current.value}${measurement.unit ? ` ${measurement.unit}` : ''}` : 'No values yet'}</strong>{current && <small>{dateLabel(current.recordedAt)}</small>}</div>
+                            {history.length >= 2 && measurement.valueType === 'NUMBER' && (() => {
+                              const series = [...history].reverse().filter((record) => typeof record.value === 'number');
+                              if (series.length < 2) return null;
+                              const values = series.map((record) => record.value as number);
+                              const min = Math.min(...values); const max = Math.max(...values);
+                              const points = values.map((value, index) => `${(index / (values.length - 1)) * 100},${28 - (max === min ? 0.5 : (value - min) / (max - min)) * 22}`).join(' ');
+                              return <svg className="measurement-sparkline" viewBox="0 0 100 32" role="img" aria-label={`${measurement.label} history, ${series.length} recorded values`} preserveAspectRatio="none"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>;
+                            })()}
+                            {measurement.valueType === 'BOOLEAN' ? (
+                              <label className="field"><span>Record value</span><select value={measurementValues[measurement.id] ?? ''} onChange={(event) => setMeasurementValues((items) => ({ ...items, [measurement.id]: event.target.value }))}><option value="">Choose…</option><option value="true">Yes</option><option value="false">No</option></select></label>
+                            ) : (
+                              <Field label="Record value" type={measurement.valueType === 'NUMBER' ? 'number' : 'text'} value={measurementValues[measurement.id] ?? ''} onChange={(event) => setMeasurementValues((items) => ({ ...items, [measurement.id]: event.target.value }))} />
+                            )}
+                            <Button type="button" variant="secondary" disabled={!measurementValues[measurement.id]} onClick={() => void recordMeasurementValue(measurement)}>Record</Button>
+                            {history.length > 1 && <details className="measurement-history"><summary>History · {history.length}</summary><ol>{history.map((record) => <li key={record.id}><strong>{record.value}{measurement.unit ? ` ${measurement.unit}` : ''}</strong><time>{dateLabel(record.recordedAt)}</time></li>)}</ol></details>}
+                          </article>
+                        );
+                      })}
+                    </div>
+                    <div className="detail-section">
+                      <div className="section-heading"><h3>Review</h3><span>Saved evidence</span></div>
+                      <div className="review-evidence">
+                        <div><span>Actions complete</span><strong>{progress?.actionCompletion?.totalActions ? `${progress.actionCompletion.completedActions} of ${progress.actionCompletion.totalActions}` : progress ? 'No active Actions' : 'Loading'}</strong></div>
+                        <div><span>Measurements with values</span><strong>{measurements.filter((measurement) => (measurementHistory[measurement.id]?.length ?? 0) > 0).length} of {measurementLoadState === 'READY' ? measurements.length : '—'}</strong></div>
+                      </div>
+                      <small className="review-evidence__note">Goal outcome progress is not calculated until its rule is configured.</small>
+                    </div>
+                  </>
+                ) : (
+                  <EmptyState
+                    icon="◎"
+                    title="Choose a goal"
+                    body="Select a goal from the map to see its milestones, actions, and progress."
+                  />
+                )}
+              </section>
+            </div>
+          )}
+
+          {page === 'planning' && (
+            <PlanningCalendar
+              actions={availableActions}
+              goals={goals}
+              actionsLoaded={actionsLoaded}
+              actionsLoadError={actionsLoadError}
+              initialDate={planningDate}
+              onRefreshActions={() => setActionRefresh((value) => value + 1)}
+              onOpenGoal={(goalId) => {
+                const goal = goals.find((item) => item.id === goalId);
+                if (goal) {
+                  setSelectedGoal(goal);
+                  setSelectedProject(projects.find((project) => project.id === goal.projectId) ?? null);
+                }
+                setPage('goals');
+              }}
+              onLogExecution={(action) => void openExecution(action)}
+            />
+          )}
+
+          {notice && (
+            <div className={`toast toast--${notice.kind}`} role="status">
+              {notice.text}
+              <button
+                aria-label="Dismiss notification"
+                onClick={() => setNotice(null)}
+              >
+                ×
+              </button>
+            </div>
+          )}
+        </section>
+      </main>
+
+      {modal === 'project' && (
+        <Modal title="Create a project" onClose={() => setModal(null)}>
+          <form className="form-stack" onSubmit={submitProject}>
+            <Field
+              label="Project name"
+              name="name"
+              placeholder="e.g. Build a healthier routine"
+              required
+              maxLength={120}
+              autoFocus
+            />
+            <TextArea
+              label="Description"
+              name="description"
+              placeholder="What would you like to make happen?"
+            />
+            <div className="modal__actions">
+              <Button
+                type="button"
+                variant="quiet"
+                onClick={() => setModal(null)}
+              >
+                Cancel
+              </Button>
+              <Button disabled={busy}>
+                {busy ? 'Creating…' : 'Create project'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {(modal === 'goal' || modal === 'child') && (
+        <Modal
+          title={modal === 'child' ? 'Add a child goal' : 'Create a goal'}
+          onClose={() => setModal(null)}
+        >
+          <form
+            className="form-stack"
+            onSubmit={(event) => submitGoal(event, modal === 'child')}
+          >
+            <Field
+              label="Goal title"
+              name="title"
+              placeholder="What do you want to achieve?"
+              required
+              maxLength={200}
+              autoFocus
+            />
+            <TextArea
+              label="Description"
+              name="description"
+              placeholder="Why does this matter to you?"
+            />
+            <Field label="Target date" name="targetDate" type="date" />
+            <div className="modal__actions">
+              <Button
+                type="button"
+                variant="quiet"
+                onClick={() => setModal(null)}
+              >
+                Cancel
+              </Button>
+              <Button disabled={busy}>{busy ? 'Saving…' : 'Save goal'}</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {modal === 'milestone' && (
+        <Modal title="Add a milestone" onClose={() => setModal(null)}>
+          <form className="form-stack" onSubmit={submitMilestone}>
+            <Field
+              label="Milestone name"
+              name="title"
+              placeholder="A meaningful checkpoint"
+              required
+              maxLength={200}
+              autoFocus
+            />
+            <TextArea
+              label="Description"
+              name="description"
+              placeholder="What will be true when you reach it?"
+            />
+            <Field label="Target date" name="targetDate" type="date" />
+            <div className="modal__actions">
+              <Button
+                type="button"
+                variant="quiet"
+                onClick={() => setModal(null)}
+              >
+                Cancel
+              </Button>
+              <Button disabled={busy}>Add milestone</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {modal === 'action' && (
+        <Modal title="Add an action" onClose={() => setModal(null)}>
+          <form className="form-stack" onSubmit={submitAction}>
+            <Field
+              label="Action"
+              name="title"
+              placeholder="A small next step"
+              required
+              maxLength={200}
+              autoFocus
+            />
+            <TextArea
+              label="Details"
+              name="description"
+              placeholder="Optional details"
+            />
+            <label className="field">
+              <span>Milestone</span>
+              <select name="milestoneId" defaultValue="">
+                <option value="">No milestone</option>
+                {milestones
+                  .filter((item) => item.status !== 'COMPLETED')
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.title}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <div className="modal__actions">
+              <Button
+                type="button"
+                variant="quiet"
+                onClick={() => setModal(null)}
+              >
+                Cancel
+              </Button>
+              <Button disabled={busy}>Add action</Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {modal === 'execution' && executionAction && (
+        <Modal
+          title={`Log execution · ${executionAction.title}`}
+          onClose={() => setModal(null)}
+        >
+          <form className="form-stack" onSubmit={submitExecution}>
+            {executionData?.executionNote && (
+              <p className="inline-success">
+                Existing note: {executionData.executionNote}
+              </p>
+            )}
+            <Field
+              label="Started at"
+              name="actualStartedAt"
+              type="datetime-local"
+              defaultValue={localDateTimeInput(executionData?.actualStartedAt)}
+            />
+            <Field
+              label="Completed at"
+              name="actualCompletedAt"
+              type="datetime-local"
+              defaultValue={localDateTimeInput(
+                executionData?.actualCompletedAt,
+              )}
+            />
+            <TextArea
+              label="Execution note"
+              name="executionNote"
+              placeholder="What happened while working on this action?"
+              defaultValue={executionData?.executionNote ?? ''}
+            />
+            <div className="modal__actions">
+              <Button
+                type="button"
+                variant="quiet"
+                onClick={() => setModal(null)}
+              >
+                Cancel
+              </Button>
+              <Button disabled={busy}>
+                {busy ? 'Saving…' : 'Save execution'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  body,
+  action,
+}: {
+  icon: string;
+  title: string;
+  body: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="empty-state">
+      <span className="empty-state__icon">{icon}</span>
+      <h3>{title}</h3>
+      <p>{body}</p>
+      {action}
+    </div>
+  );
+}
+
+
+
+============================================================
+FILE: src/app/DashboardHome.tsx
+============================================================
+
+import { useMemo, useState } from 'react';
+import type { Action, Goal, Project, Schedule } from '../lib/api';
+import './dashboard-home.css';
+
+interface DashboardHomeProps {
+  email: string | null;
+  goals: Goal[];
+  projects: Project[];
+  actions: Action[];
+  nextAction?: Action;
+  nextSchedule: Schedule | null;
+  baseDataLoaded: boolean;
+  actionsLoaded: boolean;
+  actionsLoadError: boolean;
+  schedulesLoaded: boolean;
+  schedulesLoadError: boolean;
+  onNewGoal: () => void;
+  onNewProject: () => void;
+  onOpenGoal: (goal: Goal) => void;
+  onOpenProject: (project: Project) => void;
+  onOpenExecution: (action: Action) => void;
+  onOpenPlanning: () => void;
+  onRetryActions: () => void;
+  onRetrySchedules: () => void;
+  onViewGoals: () => void;
+  onViewProjects: () => void;
+}
+
+function formatDate(value?: string | null): string {
+  if (!value) return 'No target date';
+
+  const date = new Date(`${value.slice(0, 10)}T12:00:00`);
+
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function formatSchedule(value: string): string {
+  const date = new Date(value);
+
+  return date.toLocaleString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getGreeting(): string {
+  const hour = new Date().getHours();
+
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function getGoalStatus(status: string): string {
+  return status.toLowerCase().replaceAll('_', ' ');
+}
+
+export function DashboardHome({
+  email,
+  goals,
+  projects,
+  actions,
+  nextAction,
+  nextSchedule,
+  baseDataLoaded,
+  actionsLoaded,
+  actionsLoadError,
+  schedulesLoaded,
+  schedulesLoadError,
+  onNewGoal,
+  onNewProject,
+  onOpenGoal,
+  onOpenProject,
+  onOpenExecution,
+  onOpenPlanning,
+  onRetryActions,
+  onRetrySchedules,
+  onViewGoals,
+  onViewProjects,
+}: DashboardHomeProps) {
+  const [search, setSearch] = useState('');
+
+  const filteredGoals = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+
+    if (!keyword) return goals;
+
+    return goals.filter((goal) => {
+      const projectName =
+        projects.find((project) => project.id === goal.projectId)?.name ?? '';
+
+      return (
+        goal.title.toLowerCase().includes(keyword) ||
+        (goal.description ?? '').toLowerCase().includes(keyword) ||
+        projectName.toLowerCase().includes(keyword)
+      );
+    });
+  }, [goals, projects, search]);
+
+  const filteredProjects = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+
+    if (!keyword) return projects;
+
+    return projects.filter(
+      (project) =>
+        project.name.toLowerCase().includes(keyword) ||
+        (project.description ?? '').toLowerCase().includes(keyword),
+    );
+  }, [projects, search]);
+
+  const completedActions = actions.filter(
+    (action) => action.status === 'COMPLETED',
+  ).length;
+
+  const openActions = actions.filter(
+    (action) => action.status !== 'COMPLETED',
+  ).length;
+
+  const independentGoals = goals.filter(
+    (goal) => goal.projectId === null,
+  ).length;
+
+  const nextActionGoal = nextAction
+    ? goals.find((goal) => goal.id === nextAction.goalId)
+    : null;
+
+  const scheduledAction = nextSchedule
+    ? actions.find((action) => action.id === nextSchedule.actionId)
+    : null;
+
+  return (
+    <div className="dashboard-home">
+      <section className="dh-welcome">
+        <div className="dh-welcome__content">
+          <span className="dh-eyebrow">YOUR PERSONAL OVERVIEW</span>
+
+          <h2>{getGreeting()}{email ? `, ${email.split('@')[0]}` : ''}.</h2>
+
+          <p>
+            Keep your intentions visible and move one meaningful step forward.
+          </p>
+
+          <div className="dh-welcome__actions">
+            <button
+              type="button"
+              className="dh-button dh-button--primary"
+              onClick={onNewGoal}
+            >
+              <span>＋</span> Create a goal
+            </button>
+
+            <button
+              type="button"
+              className="dh-button dh-button--secondary"
+              onClick={onNewProject}
+            >
+              <span>＋</span> New project
+            </button>
+          </div>
+        </div>
+
+        <div className="dh-welcome__decoration" aria-hidden="true">
+          <div className="dh-orbit dh-orbit--one" />
+          <div className="dh-orbit dh-orbit--two" />
+          <div className="dh-orbit__center">f</div>
+        </div>
+      </section>
+
+      <section className="dh-stats">
+        <article className="dh-stat">
+          <span className="dh-stat__label">GOALS</span>
+          <strong>{baseDataLoaded ? goals.length : '—'}</strong>
+          <small>
+            {baseDataLoaded
+              ? `${independentGoals} independent`
+              : 'Loading goals'}
+          </small>
+        </article>
+
+        <article className="dh-stat">
+          <span className="dh-stat__label">PROJECTS</span>
+          <strong>{baseDataLoaded ? projects.length : '—'}</strong>
+          <small>Organized areas of work</small>
+        </article>
+
+        <article className="dh-stat">
+          <span className="dh-stat__label">OPEN ACTIONS</span>
+          <strong>{actionsLoaded ? openActions : '—'}</strong>
+          <small>Steps still to complete</small>
+        </article>
+
+        <article className="dh-stat">
+          <span className="dh-stat__label">COMPLETED ACTIONS</span>
+          <strong>{actionsLoaded ? completedActions : '—'}</strong>
+          <small>Completed steps</small>
+        </article>
+      </section>
+
+      <section className="dh-focus-grid">
+        <article className="dh-focus-card dh-focus-card--action">
+          <div className="dh-section-label">
+            <span className="dh-section-label__icon">↗</span>
+            <span>NEXT ACTION</span>
+          </div>
+
+          {actionsLoadError ? (
+            <div className="dh-state">
+              <strong>Actions could not be loaded</strong>
+              <button type="button" onClick={onRetryActions}>
+                Try again
+              </button>
+            </div>
+          ) : !actionsLoaded ? (
+            <p className="dh-muted">Loading your actions…</p>
+          ) : nextAction ? (
+            <div className="dh-focus-content">
+              <h3>{nextAction.title}</h3>
+
+              <p>
+                {nextActionGoal?.title ?? 'Goal'} ·{' '}
+                {nextAction.status === 'IN_PROGRESS'
+                  ? 'In progress'
+                  : 'To do'}
+              </p>
+
+              <button
+                type="button"
+                className="dh-inline-link"
+                onClick={() => onOpenExecution(nextAction)}
+              >
+                Open execution <span>→</span>
+              </button>
+            </div>
+          ) : (
+            <div className="dh-state">
+              <strong>No open actions</strong>
+              <p>Create a small action under one of your goals.</p>
+              <button type="button" onClick={onViewGoals}>
+                Explore goals
+              </button>
+            </div>
+          )}
+        </article>
+
+        <article className="dh-focus-card dh-focus-card--schedule">
+          <div className="dh-section-label">
+            <span className="dh-section-label__icon">▤</span>
+            <span>UPCOMING SCHEDULE</span>
+          </div>
+
+          {schedulesLoadError ? (
+            <div className="dh-state">
+              <strong>Schedule could not be loaded</strong>
+              <button type="button" onClick={onRetrySchedules}>
+                Try again
+              </button>
+            </div>
+          ) : !schedulesLoaded ? (
+            <p className="dh-muted">Loading your schedule…</p>
+          ) : nextSchedule ? (
+            <div className="dh-focus-content">
+              <h3>{scheduledAction?.title ?? 'Scheduled action'}</h3>
+
+              <p>{formatSchedule(nextSchedule.startAt)}</p>
+
+              <button
+                type="button"
+                className="dh-inline-link"
+                onClick={onOpenPlanning}
+              >
+                Open planning <span>→</span>
+              </button>
+            </div>
+          ) : (
+            <div className="dh-state">
+              <strong>Nothing scheduled this week</strong>
+              <p>Choose a time for one of your open actions.</p>
+              <button type="button" onClick={onOpenPlanning}>
+                Open planning
+              </button>
+            </div>
+          )}
+        </article>
+      </section>
+
+      <section className="dh-workspace-section">
+        <div className="dh-section-heading">
+          <div>
+            <span className="dh-eyebrow">YOUR WORKSPACE</span>
+            <h2>Everything in motion</h2>
+            <p>Find the goal or project you want to move forward.</p>
+          </div>
+
+          <label className="dh-search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search goals and projects…"
+              aria-label="Search goals and projects"
+            />
+            {search && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                onClick={() => setSearch('')}
+              >
+                ×
+              </button>
+            )}
+          </label>
+        </div>
+
+        <div className="dh-content-grid">
+          <section className="dh-list-panel">
+            <div className="dh-panel-heading">
+              <div>
+                <h3>Goals</h3>
+                <span>{baseDataLoaded ? goals.length : '—'} total</span>
+              </div>
+
+              <button
+                type="button"
+                className="dh-text-button"
+                onClick={onViewGoals}
+              >
+                View all <span>→</span>
+              </button>
+            </div>
+
+            {!baseDataLoaded ? (
+              <p className="dh-empty-line">Loading goals…</p>
+            ) : filteredGoals.length === 0 ? (
+              <div className="dh-empty">
+                <span className="dh-empty__icon">◎</span>
+                <strong>
+                  {search ? 'No matching goals' : 'No goals yet'}
+                </strong>
+                <p>
+                  {search
+                    ? 'Try another search term.'
+                    : 'Start with an outcome that matters to you.'}
+                </p>
+                {!search && (
+                  <button
+                    type="button"
+                    className="dh-button dh-button--secondary"
+                    onClick={onNewGoal}
+                  >
+                    Create a goal
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="dh-goal-list">
+                {filteredGoals.slice(0, 6).map((goal) => {
+                  const project = projects.find(
+                    (item) => item.id === goal.projectId,
+                  );
+
+                  return (
+                    <button
+                      type="button"
+                      className="dh-goal-row"
+                      key={goal.id}
+                      onClick={() => onOpenGoal(goal)}
+                    >
+                      <span className="dh-goal-row__mark">◎</span>
+
+                      <span className="dh-row-main">
+                        <strong>{goal.title}</strong>
+                        <small>
+                          {project?.name ?? 'Independent goal'}
+                        </small>
+                      </span>
+
+                      <span className="dh-row-meta">
+                        <span className="dh-status">
+                          {getGoalStatus(goal.status)}
+                        </span>
+                        <small>{formatDate(goal.targetDate)}</small>
+                      </span>
+
+                      <span className="dh-row-arrow">→</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {filteredGoals.length > 6 && (
+              <button
+                type="button"
+                className="dh-list-footer"
+                onClick={onViewGoals}
+              >
+                View all {filteredGoals.length} goals →
+              </button>
+            )}
+          </section>
+
+          <section className="dh-list-panel">
+            <div className="dh-panel-heading">
+              <div>
+                <h3>Projects</h3>
+                <span>{baseDataLoaded ? projects.length : '—'} total</span>
+              </div>
+
+              <button
+                type="button"
+                className="dh-text-button"
+                onClick={onViewProjects}
+              >
+                View all <span>→</span>
+              </button>
+            </div>
+
+            {!baseDataLoaded ? (
+              <p className="dh-empty-line">Loading projects…</p>
+            ) : filteredProjects.length === 0 ? (
+              <div className="dh-empty">
+                <span className="dh-empty__icon">▦</span>
+                <strong>
+                  {search ? 'No matching projects' : 'No projects yet'}
+                </strong>
+                <p>
+                  {search
+                    ? 'Try another search term.'
+                    : 'Create a project when you need to group related goals.'}
+                </p>
+                {!search && (
+                  <button
+                    type="button"
+                    className="dh-button dh-button--secondary"
+                    onClick={onNewProject}
+                  >
+                    Create a project
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="dh-project-list">
+                {filteredProjects.slice(0, 6).map((project, index) => {
+                  const projectGoals = goals.filter(
+                    (goal) => goal.projectId === project.id,
+                  );
+
+                  return (
+                    <button
+                      type="button"
+                      className="dh-project-row"
+                      key={project.id}
+                      onClick={() => onOpenProject(project)}
+                    >
+                      <span
+                        className={`dh-project-mark dh-project-mark--${index % 3}`}
+                      >
+                        {project.name.slice(0, 1).toUpperCase()}
+                      </span>
+
+                      <span className="dh-row-main">
+                        <strong>{project.name}</strong>
+                        <small>
+                          {project.description || 'No description'}
+                        </small>
+                      </span>
+
+                      <span className="dh-project-count">
+                        {projectGoals.length} goals
+                      </span>
+
+                      <span className="dh-row-arrow">→</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {filteredProjects.length > 6 && (
+              <button
+                type="button"
+                className="dh-list-footer"
+                onClick={onViewProjects}
+              >
+                View all {filteredProjects.length} projects →
+              </button>
+            )}
+          </section>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+
+
+
+============================================================
+FILE: src/app/dashboard-home.css
+============================================================
+
+.dashboard-home {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+  min-width: 0;
+  color: #26352e;
+}
+
+.dashboard-home * {
+  box-sizing: border-box;
+}
+
+.dh-welcome {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 220px;
+  overflow: hidden;
+  padding: 34px 40px;
+  border: 1px solid #e4e9e3;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 90% 15%, #e2eee4 0, transparent 32%),
+    linear-gradient(115deg, #f4f7f1 0%, #edf3eb 100%);
+}
+
+.dh-welcome__content {
+  position: relative;
+  z-index: 2;
+  max-width: 590px;
+}
+
+.dh-eyebrow {
+  display: block;
+  color: #748477;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 1.5px;
+}
+
+.dh-welcome h2 {
+  margin: 13px 0 8px;
+  color: #263a2d;
+  font-size: clamp(26px, 3vw, 36px);
+  font-weight: 650;
+  letter-spacing: -1.3px;
+  line-height: 1.15;
+}
+
+.dh-welcome p {
+  margin: 0;
+  color: #778278;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.dh-welcome__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.dh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.dh-button:hover {
+  transform: translateY(-1px);
+}
+
+.dh-button--primary {
+  color: #fff;
+  background: #42694e;
+}
+
+.dh-button--primary:hover {
+  background: #34583f;
+}
+
+.dh-button--secondary {
+  color: #45604b;
+  border-color: #d9e2d8;
+  background: #fff;
+}
+
+.dh-button--secondary:hover {
+  border-color: #9eb39f;
+  background: #f8faf7;
+}
+
+.dh-welcome__decoration {
+  position: relative;
+  width: 230px;
+  height: 160px;
+  flex: 0 0 230px;
+  margin-right: 30px;
+}
+
+.dh-orbit {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border: 1px solid rgba(83, 121, 88, 0.25);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.dh-orbit--one {
+  width: 145px;
+  height: 145px;
+}
+
+.dh-orbit--two {
+  width: 205px;
+  height: 205px;
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.dh-orbit__center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 68px;
+  height: 68px;
+  place-items: center;
+  border: 1px solid #d6e3d5;
+  border-radius: 22px;
+  color: #fff;
+  background: #557b5e;
+  box-shadow: 0 12px 30px rgba(56, 91, 61, 0.16);
+  font-size: 38px;
+  font-weight: 700;
+  transform: translate(-50%, -50%) rotate(-8deg);
+}
+
+.dh-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.dh-stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+  padding: 19px 20px;
+  border: 1px solid #e9ece8;
+  border-radius: 15px;
+  background: #fff;
+}
+
+.dh-stat__label {
+  color: #89938b;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 1.2px;
+}
+
+.dh-stat strong {
+  color: #2d4033;
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.8px;
+}
+
+.dh-stat small {
+  overflow: hidden;
+  color: #929b93;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dh-focus-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.dh-focus-card {
+  min-width: 0;
+  min-height: 190px;
+  padding: 21px 23px;
+  border: 1px solid #e7ebe6;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.dh-focus-card--action {
+  background: linear-gradient(135deg, #fff 0%, #f7faf6 100%);
+}
+
+.dh-focus-card--schedule {
+  background: linear-gradient(135deg, #fff 0%, #f8f9fb 100%);
+}
+
+.dh-section-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #849087;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 1.1px;
+}
+
+.dh-section-label__icon {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border-radius: 9px;
+  color: #52755a;
+  background: #edf3eb;
+  font-size: 15px;
+}
+
+.dh-focus-card--schedule .dh-section-label__icon {
+  color: #62758b;
+  background: #edf1f6;
+}
+
+.dh-focus-content {
+  padding: 17px 0 0 36px;
+}
+
+.dh-focus-content h3 {
+  overflow-wrap: anywhere;
+  margin: 0 0 6px;
+  color: #34463a;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.dh-focus-content p {
+  margin: 0;
+  color: #8a958c;
+  font-size: 12px;
+}
+
+.dh-inline-link,
+.dh-state button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 15px;
+  padding: 0;
+  border: 0;
+  color: #52775b;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.dh-inline-link:hover,
+.dh-state button:hover {
+  color: #2e5738;
+}
+
+.dh-muted,
+.dh-empty-line {
+  margin: 22px 0 0;
+  color: #929b93;
+  font-size: 12px;
+}
+
+.dh-state {
+  padding: 17px 0 0 36px;
+}
+
+.dh-state strong {
+  display: block;
+  color: #46564a;
+  font-size: 13px;
+}
+
+.dh-state p {
+  margin: 6px 0 0;
+  color: #929b93;
+  font-size: 11px;
+}
+
+.dh-state button {
+  margin-top: 10px;
+}
+
+.dh-workspace-section {
+  display: flex;
+  flex-direction: column;
+  gap: 17px;
+}
+
+.dh-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.dh-section-heading h2 {
+  margin: 7px 0 4px;
+  color: #2f4034;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.5px;
+}
+
+.dh-section-heading p {
+  margin: 0;
+  color: #929b93;
+  font-size: 12px;
+}
+
+.dh-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(310px, 100%);
+  height: 39px;
+  padding: 0 11px;
+  border: 1px solid #e5eae4;
+  border-radius: 10px;
+  color: #879289;
+  background: #fff;
+}
+
+.dh-search:focus-within {
+  border-color: #9db39f;
+  box-shadow: 0 0 0 3px rgba(91, 130, 97, 0.08);
+}
+
+.dh-search > span {
+  font-size: 20px;
+}
+
+.dh-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: #435247;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+}
+
+.dh-search input::placeholder {
+  color: #a3aba4;
+}
+
+.dh-search button {
+  display: grid;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 23px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  color: #849087;
+  background: transparent;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.dh-content-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 15px;
+}
+
+.dh-list-panel {
+  min-width: 0;
+  overflow: hidden;
+  padding: 19px 20px 13px;
+  border: 1px solid #e8ece7;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.dh-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid #f0f2ef;
+}
+
+.dh-panel-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.dh-panel-heading h3 {
+  margin: 0;
+  color: #35463a;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.dh-panel-heading > div > span {
+  color: #9aa39b;
+  font-size: 10px;
+}
+
+.dh-text-button {
+  padding: 4px 0;
+  border: 0;
+  color: #67816b;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.dh-text-button:hover {
+  color: #34583f;
+}
+
+.dh-goal-list,
+.dh-project-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.dh-goal-row,
+.dh-project-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  min-width: 0;
+  padding: 13px 2px;
+  border: 0;
+  border-bottom: 1px solid #f1f3f0;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.dh-goal-row:last-child,
+.dh-project-row:last-child {
+  border-bottom: 0;
+}
+
+.dh-goal-row:hover,
+.dh-project-row:hover {
+  background: #f8faf7;
+}
+
+.dh-goal-row__mark {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  flex: 0 0 31px;
+  place-items: center;
+  border-radius: 10px;
+  color: #63816a;
+  background: #edf3eb;
+  font-size: 16px;
+}
+
+.dh-row-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dh-row-main strong {
+  overflow: hidden;
+  color: #405046;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dh-row-main small {
+  overflow: hidden;
+  color: #98a198;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dh-row-meta {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.dh-row-meta small {
+  color: #a0a8a1;
+  font-size: 9px;
+}
+
+.dh-status {
+  max-width: 100px;
+  overflow: hidden;
+  padding: 3px 7px;
+  border-radius: 20px;
+  color: #6e806f;
+  background: #f0f4ef;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.dh-row-arrow {
+  flex: 0 0 auto;
+  color: #a2ada3;
+  font-size: 14px;
+}
+
+.dh-project-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border-radius: 11px;
+  color: #526a56;
+  background: #edf2e9;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dh-project-mark--1 {
+  color: #68778b;
+  background: #eef1f6;
+}
+
+.dh-project-mark--2 {
+  color: #92765d;
+  background: #f5f0e9;
+}
+
+.dh-project-count {
+  flex: 0 0 auto;
+  color: #929d94;
+  font-size: 10px;
+}
+
+.dh-empty {
+  display: flex;
+  min-height: 210px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 12px;
+  text-align: center;
+}
+
+.dh-empty__icon {
+  display: grid;
+  width: 39px;
+  height: 39px;
+  place-items: center;
+  border-radius: 13px;
+  color: #67816b;
+  background: #eff4ed;
+  font-size: 20px;
+}
+
+.dh-empty strong {
+  margin-top: 12px;
+  color: #4a5a4d;
+  font-size: 12px;
+}
+
+.dh-empty p {
+  max-width: 240px;
+  margin: 6px 0 12px;
+  color: #9aa39b;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.dh-list-footer {
+  width: 100%;
+  padding: 12px 0 3px;
+  border: 0;
+  border-top: 1px solid #f0f2ef;
+  color: #67816b;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  text-align: center;
+  cursor: pointer;
+}
+
+.dh-list-footer:hover {
+  color: #34583f;
+}
+
+@media (max-width: 1050px) {
+  .dh-welcome {
+    padding: 30px;
+  }
+
+  .dh-welcome__decoration {
+    margin-right: 0;
+    transform: scale(0.85);
+  }
+
+  .dh-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .dashboard-home {
+    gap: 17px;
+  }
+
+  .dh-welcome {
+    min-height: 0;
+    padding: 25px 22px;
+  }
+
+  .dh-welcome__decoration {
+    position: absolute;
+    right: -65px;
+    bottom: -35px;
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+
+  .dh-welcome__content {
+    max-width: 100%;
+  }
+
+  .dh-welcome h2 {
+    max-width: 330px;
+    font-size: 27px;
+  }
+
+  .dh-welcome p {
+    max-width: 320px;
+  }
+
+  .dh-stats {
+    gap: 9px;
+  }
+
+  .dh-stat {
+    padding: 14px;
+  }
+
+  .dh-stat strong {
+    font-size: 24px;
+  }
+
+  .dh-focus-grid,
+  .dh-content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dh-focus-card {
+    min-height: 165px;
+  }
+
+  .dh-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dh-search {
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .dh-welcome {
+    padding: 22px 17px;
+  }
+
+  .dh-welcome__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dh-welcome__actions .dh-button {
+    width: 100%;
+  }
+
+  .dh-stat {
+    padding: 12px;
+  }
+
+  .dh-stat__label {
+    font-size: 8px;
+  }
+
+  .dh-stat strong {
+    font-size: 22px;
+  }
+
+  .dh-list-panel {
+    padding: 16px 13px 12px;
+  }
+
+  .dh-row-meta {
+    display: none;
+  }
+
+  .dh-project-count {
+    font-size: 9px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dh-button,
+  .dh-goal-row,
+  .dh-project-row {
+    transition: none;
+  }
+
+  .dh-button:hover {
+    transform: none;
+  }
+}
+
+
+
+
+============================================================
+FILE: src/app/workspace-manager.css
+============================================================
+.workspace-manager { display: grid; gap: 1.5rem; }
+.workspace-manager__create, .workspace-manager__item, .workspace-manager__empty { border: 1px solid var(--line, #e7e6e1); border-radius: 18px; background: var(--surface, #fff); }
+.workspace-manager__create { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(320px, 1.2fr); align-items: end; gap: 1.5rem; padding: 1.5rem; }
+.workspace-manager__create h2, .workspace-manager__heading h2 { margin: 0; font-size: 1.1rem; }
+.workspace-manager__create p { margin: .45rem 0 0; color: var(--muted, #777); font-size: .9rem; }
+.workspace-manager__form { display: flex; align-items: end; gap: .75rem; }
+.workspace-manager__form .field { flex: 1; }
+.workspace-manager__heading { display: flex; justify-content: space-between; align-items: baseline; }
+.workspace-manager__heading span { color: var(--muted, #777); font-size: .88rem; }
+.workspace-manager__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: .9rem; }
+.workspace-manager__item { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: .8rem; padding: 1.1rem; }
+.workspace-manager__mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: #eff3e8; color: #526243; font-size: 1.3rem; }
+.workspace-manager__details { min-width: 0; }
+.workspace-manager__details h3 { margin: 0; overflow-wrap: anywhere; font-size: 1rem; }
+.workspace-manager__details p { margin: .35rem 0 0; color: var(--muted, #777); font-size: .8rem; }
+.workspace-manager__actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: .6rem; padding-top: .35rem; }
+.workspace-manager__empty { padding: 3rem 1.5rem; text-align: center; }
+.workspace-manager__empty > span { font-size: 2rem; color: #71815e; }
+.workspace-manager__empty h3 { margin: .7rem 0 .35rem; }
+.workspace-manager__empty p { max-width: 28rem; margin: 0 auto; color: var(--muted, #777); }
+@media (max-width: 700px) { .workspace-manager__create { grid-template-columns: 1fr; } .workspace-manager__form { align-items: stretch; flex-direction: column; } .workspace-manager__actions { justify-content: stretch; } .workspace-manager__actions > * { flex: 1; } }
+
+
+
+
+============================================================
+FILE: src/styles.css
+============================================================
+:root{font-family:'DM Sans',Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#26352e;background:#f7f8f5;font-synthesis:none;text-rendering:optimizeLegibility;font-optical-sizing:auto;font-weight:400;--ink:#26352e;--muted:#87918a;--green:#476f5c;--green-dark:#365a49;--line:#e9ede8;--paper:#fff;--soft:#eff4ef;--peach:#f6eee7;--shadow:0 12px 36px rgba(37,55,43,.055)}
+*{box-sizing:border-box}body{margin:0;min-width:320px;min-height:100vh}button,input,textarea,select{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid rgba(87,137,108,.28);outline-offset:2px}button:disabled{opacity:.65;cursor:wait}h1,h2,h3,p{margin-top:0}h1,h2,h3,strong{font-family:Manrope,'DM Sans',sans-serif}h1{letter-spacing:-.045em}h2,h3{letter-spacing:-.025em}.muted,.page-heading p,.panel__heading p{color:var(--muted)}
+.button{display:inline-flex;align-items:center;justify-content:center;gap:9px;border:0;border-radius:10px;padding:11px 17px;font-size:13px;font-weight:700;transition:transform .16s,background .16s,box-shadow .16s}.button:hover{transform:translateY(-1px)}.button--primary{background:var(--green);color:white;box-shadow:0 5px 12px rgba(71,111,92,.16)}.button--primary:hover{background:var(--green-dark)}.button--secondary{background:#fff;color:var(--green-dark);border:1px solid #dce6dd}.button--secondary:hover{background:#f7faf7}.button--quiet{background:transparent;color:#66746b}.button--danger{background:#a95249;color:#fff}.icon-button{width:34px;height:34px;border:1px solid var(--line);background:#fff;color:#65736a;border-radius:9px;font-size:18px;display:grid;place-items:center}.icon-button:hover{background:#f6f8f5}
+.eyebrow{font-size:10px;letter-spacing:.15em;font-weight:700;color:#809386}.brand{display:flex;align-items:center;gap:10px;font-family:Manrope,sans-serif;font-size:19px;font-weight:800;letter-spacing:-.06em;color:#30483a}.brand__mark{width:29px;height:29px;background:#557a63;color:#fff;display:grid;place-items:center;border-radius:9px;font-size:21px;line-height:1;font-family:Manrope,sans-serif}.brand--large{font-size:22px;color:white}.brand--large .brand__mark{background:#edf4e9;color:#557660;width:34px;height:34px}
+.app-layout{min-height:100vh}.sidebar{position:fixed;inset:0 auto 0 0;width:246px;background:#fbfcfa;border-right:1px solid #eaeee9;padding:26px 17px 14px;display:flex;flex-direction:column;z-index:10}.sidebar>.brand{padding:0 9px 31px}.workspace-switch{display:flex;align-items:center;gap:11px;padding:11px 10px;margin:0 0 27px;border:1px solid #ebefea;border-radius:10px;background:#fff}.workspace-switch__icon{width:33px;height:33px;border-radius:8px;display:grid;place-items:center;background:#eef4ee;color:var(--green);font-size:18px}.workspace-switch small,.profile-button__info small{display:block;font-size:8px;letter-spacing:.12em;font-weight:700;color:#9aa59c;margin-bottom:3px}.workspace-switch strong{font-size:11px;display:block;max-width:135px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.workspace-switch__chevron{margin-left:auto;color:#929d95}.nav-list{display:grid;gap:4px}.nav-label{padding:0 10px 9px;font-size:9px;color:#a1aaa3;font-weight:700;letter-spacing:.14em}.nav-item{position:relative;display:flex;align-items:center;gap:12px;width:100%;height:42px;border:0;border-radius:8px;background:transparent;color:#758078;text-align:left;padding:0 11px;font-weight:600;font-size:12px}.nav-item:hover{background:#f3f6f2;color:#475c4e}.nav-item--active{background:#edf3ed;color:#42644f}.nav-item__icon{width:18px;font-size:17px;text-align:center;color:#819086}.nav-item--active .nav-item__icon{color:#4b745a}.nav-item__active-dot{margin-left:auto;width:5px;height:5px;border-radius:50%;background:#5e896b}.sidebar__bottom{margin-top:auto}.sidebar-tip{padding:14px 13px;margin:0 1px 16px;background:#f1f5ef;border-radius:11px}.sidebar-tip>span{color:#7a9b76;font-size:16px}.sidebar-tip strong{display:block;font-size:11px;margin:7px 0 4px}.sidebar-tip p{font-size:10px;line-height:1.55;color:#89958b;margin:0}.profile-button{display:flex;align-items:center;gap:9px;padding:11px 5px 5px;width:100%;border:0;border-top:1px solid #ebefea;background:none;text-align:left}.avatar{width:31px;height:31px;border-radius:50%;display:grid;place-items:center;background:#dce9dd;color:#4d7358;font-weight:700;font-size:10px;flex:none}.avatar--small{width:30px;height:30px}.profile-button__info{overflow:hidden;flex:1}.profile-button__info strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}.profile-button__info small{letter-spacing:.01em;margin:3px 0 0;font-weight:500}.profile-button__menu{color:#8f9b91}
+.main-area{margin-left:246px;min-height:100vh}.topbar{height:67px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 clamp(24px,4vw,58px);background:rgba(255,255,255,.68)}.breadcrumbs{display:flex;align-items:center;gap:11px;color:#9aa39b;font-size:11px}.breadcrumbs b{font-weight:400;color:#c4cbc5}.breadcrumbs strong{color:#4c5a50;font-size:11px}.topbar__right{display:flex;align-items:center;gap:18px}.topbar-date{color:#929b94;font-size:11px}.menu-toggle{display:none;border:0;background:transparent;font-size:19px;color:#526457}.page-content{max-width:1320px;margin:0 auto;padding:38px clamp(24px,4vw,58px) 60px}.page-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:25px}.page-heading h1{font-size:29px;margin:7px 0 5px;font-weight:700}.page-heading p{font-size:12px;margin:0}.heading-actions{display:flex;align-items:center;gap:10px}.heading-actions select,.panel__heading .field input{min-width:150px}
+.hero-card{position:relative;overflow:hidden;min-height:236px;border-radius:15px;background:#eaf1e8;padding:32px 37px;display:flex;align-items:center;box-shadow:var(--shadow)}.hero-card__content{position:relative;z-index:1}.hero-card__tag{font-size:9px;letter-spacing:.16em;font-weight:700;color:#6f8c72}.hero-card h2{font-family:Manrope,sans-serif;font-size:30px;line-height:1.2;margin:12px 0 9px;color:#334a3b;letter-spacing:-.045em}.hero-card h2 em{font-style:normal;color:#66896a}.hero-card p{color:#819083;font-size:12px;margin:0 0 17px}.hero-illustration{position:absolute;right:1.5%;top:0;height:100%;width:43%;overflow:hidden}.hero-illustration__sun{position:absolute;top:27px;right:74px;width:104px;height:104px;border-radius:50%;background:#f8e8c6}.hero-illustration__hill{position:absolute;bottom:-70px;border-radius:50% 50% 0 0;transform:rotate(-12deg)}.hero-illustration__hill--back{right:-30px;width:330px;height:185px;background:#bed2b7;transform:rotate(16deg)}.hero-illustration__hill--front{right:65px;bottom:-110px;width:350px;height:235px;background:#92b093;transform:rotate(-9deg)}.hero-illustration>span{position:absolute;right:74px;top:44px;color:#e6b461;font-size:22px}.section-title{display:flex;justify-content:space-between;align-items:flex-end;margin:31px 1px 16px}.section-title h2{font-size:16px;margin:0 0 4px}.section-title p{margin:0;color:var(--muted);font-size:11px}.text-link{display:inline-flex;align-items:center;gap:7px;border:0;background:none;color:#5b7b63;font-size:11px;font-weight:700;padding:6px}.text-link:hover{color:#294b37}.stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.stat-card{position:relative;min-height:139px;background:#fff;border:1px solid #edf0ec;border-radius:12px;padding:17px 19px;box-shadow:0 4px 15px rgba(36,52,42,.025)}.stat-card__icon{width:30px;height:30px;display:grid;place-items:center;border-radius:8px;font-size:17px;margin-bottom:12px}.stat-card__icon--peach{color:#aa7c60;background:#f8eee7}.stat-card__icon--sage{color:#62856a;background:#edf4ec}.stat-card__icon--blue{color:#6c8392;background:#edf2f5}.stat-card__label{position:absolute;top:23px;left:59px;font-size:8px;letter-spacing:.11em;font-weight:700;color:#9aa39b}.stat-card>strong{display:block;font-size:23px;color:#34453a;line-height:1.1}.stat-card>small{font-size:10px;color:#9aa39b}.home-columns{display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-top:17px}.panel{border:1px solid #edf0ec;border-radius:12px;background:#fff;box-shadow:0 4px 18px rgba(36,52,42,.025);padding:19px}.panel__heading{display:flex;justify-content:space-between;align-items:center;gap:15px}.panel__heading h2{font-size:14px;margin:0 0 4px}.panel__heading p{font-size:10px;margin:0}.project-list{margin-top:13px}.project-row{display:flex;width:100%;align-items:center;text-align:left;padding:11px 1px;border:0;border-top:1px solid #f0f2ef;background:white}.project-row:hover,.focus-row:hover{background:#fbfcfa}.project-avatar{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-family:Manrope,sans-serif;font-size:13px;font-weight:700;background:#f3e9df;color:#9c755c;flex:none}.project-avatar--1{background:#e9f0e7;color:#618062}.project-avatar--2{background:#e9eef1;color:#728895}.project-row__body,.focus-row>span:nth-child(2),.item-row__body{flex:1;min-width:0}.project-row__body strong,.focus-row strong,.item-row__body strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.project-row__body small,.focus-row small,.item-row__body small{display:block;color:#a0a9a1;font-size:9px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-row__body{padding:0 11px}.project-row__arrow{color:#a8b2a9;font-size:15px}.focus-row{display:flex;align-items:center;gap:10px;width:100%;padding:11px 3px;text-align:left;border:0;border-top:1px solid #f0f2ef;background:#fff}.focus-row>span:last-child{color:#a3ada4}.focus-row__dot{width:8px;height:8px;border:2px solid #79a17d;border-radius:50%;flex:none}.focus-panel .panel__heading{margin-bottom:11px}
+.project-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:17px}.project-card{overflow:hidden;text-align:left;border:1px solid #ebefea;border-radius:13px;background:#fff;padding:0;box-shadow:0 4px 18px rgba(36,52,42,.035);transition:transform .18s,box-shadow .18s}.project-card:hover{transform:translateY(-3px);box-shadow:var(--shadow)}.project-card__art{height:113px;display:grid;place-items:center;background:#eaf1e8;overflow:hidden}.project-card__art>span{width:48px;height:48px;display:grid;place-items:center;border:1px solid rgba(75,113,83,.18);border-radius:15px;background:rgba(255,255,255,.65);font-family:Manrope,sans-serif;font-weight:800;font-size:22px;color:#5c7d60}.project-card__art--1{background:#f4eee6}.project-card__art--1>span{color:#aa8567}.project-card__art--2{background:#e9eff1}.project-card__art--2>span{color:#728a94}.project-card__content{display:block;padding:15px}.project-card__content>strong{display:block;font-size:13px}.project-card__content>small{display:block;min-height:18px;margin-top:5px;color:#9aa39b;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-card__footer{display:flex;justify-content:space-between;align-items:center;margin-top:13px;padding-top:11px;border-top:1px solid #f0f2ef;font-size:10px;color:#6d836f}.project-card__footer b{font-size:15px;font-weight:400}
+.goals-layout{display:grid;grid-template-columns:minmax(265px,.85fr) minmax(370px,1.45fr);align-items:start;gap:16px}.hierarchy-panel{padding:18px 13px;min-height:390px}.hierarchy-panel .panel__heading{padding:0 5px 13px}.count-pill{border-radius:30px;background:#f1f5f0;color:#78907b;padding:6px 10px;font-size:9px;font-weight:600;white-space:nowrap}.goal-tree{border-top:1px solid #f0f2ef;padding-top:8px}.tree-row{display:flex;align-items:center;gap:9px;position:relative;width:100%;height:37px;border:0;border-radius:7px;background:transparent;text-align:left;color:#526056;font-size:10px;padding-right:9px}.tree-row:hover{background:#f7f9f6}.tree-row--active{background:#edf4ed;color:#3f654b;font-weight:700}.tree-row__branch{width:14px;flex:none;color:#89a08b}.tree-row__status{margin-left:auto;color:#a0aaa1;font-size:8px;text-transform:capitalize}.goal-detail{min-height:390px;border:1px solid #edf0ec;border-radius:12px;background:white;padding:21px;box-shadow:0 4px 18px rgba(36,52,42,.025)}.goal-detail__header{display:flex;justify-content:space-between;align-items:flex-start;gap:15px}.goal-detail__header h2{font-size:19px;margin:5px 0 0}.status-badge{padding:6px 9px;border-radius:20px;background:#f4f3ea;color:#93885d;text-transform:capitalize;font-size:9px;font-weight:700}.status-badge--completed{background:#edf4ed;color:#5d815f}.goal-description{margin:13px 0;color:#829087;font-size:11px;line-height:1.6}.goal-meta{display:flex;gap:17px;padding:12px 0;border-top:1px solid #f0f2ef;border-bottom:1px solid #f0f2ef;color:#8e9a91;font-size:9px}.progress-block{padding:15px 0 11px}.progress-block__heading{display:flex;justify-content:space-between;font-size:10px;margin-bottom:8px}.progress-block__heading strong{font-size:10px}.progress-block__heading span{color:#709074;font-weight:700}.progress-track{height:6px;background:#edf1ed;border-radius:9px;overflow:hidden}.progress-track>span{display:block;height:100%;background:#75a17a;border-radius:9px;transition:width .25s}.progress-block>small{display:block;margin-top:6px;color:#a0aaa1;font-size:8px}.detail-actions{display:flex;flex-wrap:wrap;gap:7px;padding:9px 0 14px;border-bottom:1px solid #f0f2ef}.detail-actions .button{font-size:9px;padding:8px 10px}.detail-section{padding-top:14px}.section-heading{display:flex;align-items:center;gap:8px;margin-bottom:5px}.section-heading h3{font-size:11px;margin:0}.section-heading>span{display:grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border-radius:8px;background:#f1f4f0;color:#8b9b8d;font-size:8px}.item-row,.action-row{display:flex;align-items:center;gap:10px;min-height:42px;border-top:1px solid #f2f4f1;padding:7px 0}.check-circle{width:16px;height:16px;border:1px solid #cbd6cc;border-radius:50%;display:grid;place-items:center;color:white;font-size:10px;flex:none}.check-circle--done{background:#729674;border-color:#729674}.item-row .text-link{font-size:9px}.action-row__mark{width:17px;height:17px;border-radius:5px;background:#eff4ef;display:grid;place-items:center;color:#67856c;font-size:10px;flex:none}.action-row select{max-width:106px;border:1px solid #e8ede8;border-radius:7px;padding:5px;background:#fff;color:#68776c;font-size:9px}.empty-line{color:#a1aaa2;font-size:10px;padding:12px 0;margin:0}.empty-line--center{text-align:center;padding:32px 10px}
+.planning-layout{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(220px,.8fr);gap:16px;align-items:start}.planning-panel{min-height:430px;padding:21px}.planning-panel .panel__heading>.field{max-width:165px}.field{display:grid;gap:6px;color:#727f75;font-size:10px;font-weight:600}.field input,.field textarea,.field select{width:100%;border:1px solid #e4eae4;border-radius:8px;background:#fff;color:#3c4b40;padding:10px 11px;font-size:11px;font-weight:400}.field input::placeholder,.field textarea::placeholder{color:#b1bab2}.field textarea{resize:vertical;line-height:1.5}.field select{appearance:auto}.plan-date-strip{display:flex;align-items:center;gap:11px;padding:19px 0 14px;margin-top:14px;border-top:1px solid #eef1ed}.plan-date-strip__day{color:#829084;font-size:10px}.plan-date-strip>strong{font-size:13px}.plan-date-strip>.count-pill{margin-left:auto}.schedule-row{display:flex;align-items:center;gap:13px;min-height:59px;border-top:1px solid #f0f2ef}.schedule-row__time{width:58px;font-size:10px;font-weight:700;color:#586c5d}.schedule-row__time small{display:block;margin-top:4px;color:#a0aaa1;font-weight:400;font-size:9px}.schedule-row__line{width:2px;height:32px;border-radius:2px;background:#d4e2d4}.schedule-row__body{flex:1}.schedule-row__body strong{display:block;font-size:11px}.schedule-row__body small{display:block;margin-top:4px;color:#9ba69d;font-size:9px}.schedule-form{display:grid;grid-template-columns:minmax(150px,1fr) 100px 100px auto;align-items:end;gap:9px;margin-top:15px;padding-top:16px;border-top:1px solid #eef1ed}.schedule-form .button{padding:10px 12px;font-size:10px}.planning-aside{background:#edf3ec;border-color:#e7eee6;min-height:235px;padding:23px}.planning-aside__icon{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:#fff;color:#7a9a78}.planning-aside h2{font-size:15px;margin:14px 0 7px}.planning-aside p{font-size:10px;line-height:1.7;color:#819082}.planning-aside__note{border-top:1px solid #dce7dc;padding-top:14px;margin-top:18px}.planning-aside__note strong,.planning-aside__note span{display:block;font-size:9px}.planning-aside__note strong{margin-bottom:5px;color:#5d755f}.planning-aside__note span{color:#8b988c;line-height:1.5}
+.empty-state{display:flex;flex-direction:column;align-items:center;text-align:center;padding:27px 15px 25px}.empty-state__icon{display:grid;place-items:center;width:41px;height:41px;border-radius:13px;background:#f0f5ef;color:#769177;font-size:21px;margin-bottom:12px}.empty-state h3{font-size:12px;margin:0 0 5px}.empty-state p{max-width:230px;color:#98a29a;font-size:10px;line-height:1.55;margin:0 0 13px}.empty-state .button{font-size:10px;padding:9px 12px}.empty-wide{grid-column:1/-1;background:white;border:1px solid #edf0ec;border-radius:13px}.welcome-card{display:flex;align-items:center;gap:15px;margin-bottom:19px;padding:16px 19px;border:1px solid #e5ece4;border-radius:12px;background:#f1f6ef}.welcome-card__icon{width:39px;height:39px;border-radius:10px;display:grid;place-items:center;background:#fff;color:#628269;font-size:20px}.welcome-card>div:nth-child(2){flex:1}.welcome-card h2{font-size:13px;margin:0 0 4px}.welcome-card p{font-size:10px;color:#8e9b90;margin:0}.welcome-card .button{font-size:10px}.toast{position:fixed;right:24px;bottom:22px;z-index:30;display:flex;align-items:center;gap:15px;max-width:min(440px,calc(100vw - 32px));padding:13px 15px;border-radius:10px;background:#fff;box-shadow:0 12px 35px rgba(38,53,46,.16);font-size:11px;color:#536258;border:1px solid #e9eee9}.toast--error{border-left:3px solid #c56a5c}.toast--success{border-left:3px solid #6d9671}.toast button{border:0;background:transparent;color:#8a958c;font-size:17px}.loading{display:flex;align-items:center;gap:11px;color:#758278;font-size:12px}.spinner{width:17px;height:17px;border:2px solid #e4ece4;border-top-color:#63886a;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.boot-screen{min-height:100vh;display:grid;place-items:center;background:#f7f8f5}
+.auth-page{min-height:100vh;display:grid;grid-template-columns:1.08fr .92fr;background:white}.auth-art{position:relative;overflow:hidden;min-height:100vh;padding:38px clamp(30px,6vw,90px);background:#577a62;color:#fff}.auth-art__copy{position:relative;z-index:1;margin-top:clamp(130px,23vh,230px);max-width:510px}.auth-art__copy .eyebrow{color:#d3e2d1}.auth-art__copy h1{font-family:Manrope,sans-serif;font-size:clamp(42px,5.2vw,68px);line-height:1.1;margin:18px 0;letter-spacing:-.06em}.auth-art__copy h1 em{color:#d8e6c8;font-style:normal}.auth-art__copy p{max-width:360px;color:#dae5da;font-size:14px;line-height:1.7}.auth-art__orbit{position:absolute;border:1px solid rgba(235,245,230,.13);border-radius:50%;width:600px;height:600px;right:-200px;bottom:-320px}.auth-art__orbit--two{width:410px;height:410px;right:-100px;bottom:-220px}.auth-art__spark{position:absolute;right:14%;top:22%;color:#d7e5c7;font-size:31px}.auth-panel{display:grid;place-items:center;padding:40px 27px}.auth-panel__inner{width:min(370px,100%)}.auth-panel__inner>h2{font-size:27px;margin:13px 0 6px}.auth-panel__inner>.muted{font-size:12px;margin-bottom:27px}.form-stack{display:grid;gap:15px}.form-stack>.button{margin-top:4px;padding:13px}.auth-switch{font-size:11px;color:#8c968e;text-align:center;margin:21px 0}.auth-switch button{border:0;background:none;color:#58795f;font-weight:700;padding:0 2px}.auth-footnote{border-top:1px solid #eff1ef;padding-top:16px;text-align:center;color:#a3aba4;font-size:9px;line-height:1.5}.inline-success{font-size:11px;line-height:1.5;color:#527a5a;background:#f0f6ef;padding:10px;border-radius:7px;margin:0}.modal-backdrop{position:fixed;inset:0;z-index:25;background:rgba(34,47,38,.35);display:grid;place-items:center;padding:20px}.modal{width:min(480px,100%);border-radius:14px;background:#fff;padding:22px;box-shadow:0 22px 70px rgba(24,38,29,.22);animation:modal-in .16s ease-out}@keyframes modal-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}.modal__header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.modal__header h2{font-size:17px;margin:0}.modal .form-stack{gap:13px}.modal__actions{display:flex;justify-content:flex-end;gap:8px;padding-top:5px}.modal__actions .button{font-size:11px}.mobile-scrim{display:none}
+@media(max-width:1050px){.sidebar{width:220px}.main-area{margin-left:220px}.project-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.schedule-form{grid-template-columns:1fr 1fr}.schedule-form .field:first-child{grid-column:1/-1}.schedule-form .button{height:38px}.goals-layout{grid-template-columns:minmax(230px,.8fr) minmax(330px,1.2fr)}}
+@media(max-width:760px){.sidebar{transform:translateX(-100%);transition:transform .2s;width:260px;box-shadow:none}.sidebar--open{transform:translateX(0);box-shadow:12px 0 40px rgba(24,38,29,.12)}.mobile-scrim{display:block;position:fixed;inset:0;z-index:9;border:0;background:rgba(34,47,38,.28)}.main-area{margin-left:0}.topbar{height:59px;padding:0 18px}.menu-toggle{display:block}.breadcrumbs{margin-right:auto;margin-left:12px}.topbar-date{display:none}.page-content{padding:28px 18px 46px}.page-heading{align-items:flex-start;flex-direction:column}.page-heading h1{font-size:25px}.page-heading>.button,.heading-actions,.page-heading>div{align-self:stretch}.heading-actions{display:flex}.heading-actions select{flex:1;min-width:0}.hero-card{min-height:225px;padding:26px 23px}.hero-card h2{font-size:25px}.hero-illustration{right:-22%;width:56%;opacity:.8}.stat-grid{gap:8px}.stat-card{padding:13px;min-height:126px}.stat-card__label{position:static;display:block;margin:0 0 10px;font-size:7px}.stat-card__icon{margin-bottom:10px;width:27px;height:27px}.stat-card>strong{font-size:20px}.stat-card>small{font-size:9px}.home-columns{grid-template-columns:1fr}.goals-layout,.planning-layout{grid-template-columns:1fr}.goal-detail{min-height:0}.project-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.project-card__art{height:90px}.project-card__content{padding:12px}.project-card__content>strong{font-size:11px}.planning-aside{display:none}.planning-panel{padding:17px}.planning-panel .panel__heading{align-items:flex-start;flex-direction:column}.planning-panel .panel__heading>.field{width:100%;max-width:none}.schedule-form{grid-template-columns:1fr 1fr}.schedule-form .field:first-child{grid-column:1/-1}.schedule-form .button{grid-column:1/-1}.welcome-card{align-items:flex-start;flex-wrap:wrap}.welcome-card>div:nth-child(2){width:calc(100% - 55px)}.welcome-card .button{margin-left:54px}.auth-page{grid-template-columns:1fr}.auth-art{min-height:260px;padding:24px 25px}.auth-art__copy{margin-top:38px}.auth-art__copy h1{font-size:38px;margin:10px 0}.auth-art__copy p{font-size:11px;max-width:270px}.auth-art__spark{right:12%;top:37%}.auth-art__orbit{width:300px;height:300px;right:-110px;bottom:-195px}.auth-art__orbit--two{width:220px;height:220px;right:-60px;bottom:-145px}.auth-panel{padding:42px 26px}.auth-panel__inner{max-width:390px}}
+@media(max-width:420px){.page-content{padding-left:13px;padding-right:13px}.hero-card{padding:23px 18px}.hero-card h2{font-size:22px}.hero-card p{max-width:205px;line-height:1.5}.hero-illustration{right:-40%;opacity:.55}.stat-grid{grid-template-columns:1fr}.stat-card{min-height:94px;padding:13px 15px 13px 58px}.stat-card__icon{position:absolute;left:15px;top:19px}.stat-card__label{margin:2px 0 5px}.stat-card>strong{display:inline-block;margin-right:7px;font-size:17px}.stat-card>small{font-size:9px}.project-grid{grid-template-columns:1fr}.project-card{display:flex;min-height:98px}.project-card__art{width:95px;height:auto;flex:none}.project-card__content{flex:1}.goal-detail{padding:16px}.goal-detail__header h2{font-size:16px}.goal-meta{gap:9px;flex-wrap:wrap}.topbar__right{gap:0}.heading-actions{flex-direction:column;align-items:stretch}}
+
+
+
+
+============================================================
+FILE: src/lib/api.ts
+============================================================
+const API_BASE_URL = (
+  import.meta.env.DEV ? '' : (import.meta.env.VITE_API_BASE_URL ?? '')
+)
+  .replace(/\/api\/?$/, '')
+  .replace(/\/$/, '');
+const TOKEN_KEY = 'flow-up.access-token';
+const WORKSPACE_KEY = 'flow-up.active-workspace';
+
+export interface UserContext {
+  userId: string;
+  email: string | null;
+  isAuthenticated: true;
+}
+export interface Workspace {
+  id: string;
+  userId: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface Project {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface Goal {
+  id: string;
+  workspaceId: string;
+  projectId: string | null;
+  parentGoalId: string | null;
+  title: string;
+  description: string | null;
+  targetDate: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+export interface GoalNode {
+  goal: Goal;
+  children: GoalNode[];
+}
+export interface Milestone {
+  id: string;
+  goalId: string;
+  title: string;
+  description: string | null;
+  targetDate: string | null;
+  status: 'PENDING' | 'COMPLETED';
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+export type ActionStatus = 'TODO' | 'IN_PROGRESS' | 'COMPLETED';
+export interface Action {
+  id: string;
+  goalId: string;
+  milestoneId: string | null;
+  title: string;
+  description: string | null;
+  status: ActionStatus;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  archivedAt: string | null;
+}
+export interface Execution {
+  actionId: string;
+  actualStartedAt: string | null;
+  actualCompletedAt: string | null;
+  actualDurationMinutes: number | null;
+  executionNote: string | null;
+}
+export interface Measurement {
+  id: string; goalId: string; label: string; description: string | null;
+  valueType: 'NUMBER' | 'TEXT' | 'BOOLEAN'; unit: string | null;
+  targetValue: number | string | boolean | null; createdAt: string; updatedAt: string; archivedAt: string | null;
+}
+export interface MeasurementRecord {
+  id: string; measurementId: string; value: number | string | boolean;
+  recordedAt: string; createdAt: string; note: string | null;
+}
+export interface DailyPlan {
+  id: string;
+  userId: string;
+  date: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface Schedule {
+  id: string;
+  actionId: string;
+  dailyPlanId: string | null;
+  startAt: string;
+  endAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface ProgressSummary {
+  goalId: string;
+  goalProgress: {
+    goalId: string;
+    progressValue: number | null;
+    calculationStatus: string;
+    contributingSources: string[];
+    calculationContext: Record<string, unknown>;
+  };
+  measurementProgress: Array<{
+    measurementId: string;
+    currentValue: unknown;
+    targetValue: unknown;
+    progressValue: number | null;
+    calculationStatus: string;
+  }>;
+  actionCompletion: {
+    totalActions: number | null;
+    completedActions: number | null;
+    incompleteActions?: number | null;
+    completionValue: number | null;
+    calculationStatus: string;
+    calculationContext?: Record<string, unknown>;
+  } | null;
+  childGoalProgress: unknown[];
+  calculationStatus: string;
+}
+export interface AIClarification {
+  outcome: string;
+  successCriteria: string[];
+  knownFacts: string[];
+  assumptions: string[];
+  missingInformation: string[];
+  questions: { id: string; prompt: string; why: string; answerType: string; required: boolean; options: string[] }[];
+  provenance: 'NEEDS_CONFIRMATION';
+}
+export interface AIFeasibility {
+  assessment: 'FEASIBLE' | 'CONCERN' | 'INSUFFICIENT_INFORMATION';
+  summary: string;
+  concerns: string[];
+  alternatives: string[];
+  assumptions: string[];
+  missingInformation: string[];
+  provenance: 'AI_PROPOSED';
+}
+export interface AIProposalItem {
+  id: string;
+  type: 'GOAL' | 'MILESTONE' | 'ACTION' | 'MEASUREMENT';
+  title: string;
+  description: string;
+  targetDate: string | null;
+  parentItemId: string | null;
+  rationale: string;
+  valueType?: 'NUMBER' | 'TEXT' | 'BOOLEAN' | null;
+  unit?: string | null;
+  targetValue?: number | string | boolean | null;
+}
+export interface AIProposal {
+  id: string;
+  status: string;
+  proposalData: { summary: string; items: AIProposalItem[]; provenance: 'AI_PROPOSED'; applicationResults?: { operation: string; success: boolean; entityId?: string; errorCode?: string }[] };
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+export function getStoredToken(): string | null {
+  return sessionStorage.getItem(TOKEN_KEY);
+}
+export function saveToken(token: string): void {
+  sessionStorage.setItem(TOKEN_KEY, token);
+}
+export function clearToken(): void {
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(WORKSPACE_KEY);
+}
+export function getStoredWorkspaceId(): string | null {
+  return sessionStorage.getItem(WORKSPACE_KEY);
+}
+export function saveWorkspaceId(workspaceId: string | null): void {
+  if (workspaceId) sessionStorage.setItem(WORKSPACE_KEY, workspaceId);
+  else sessionStorage.removeItem(WORKSPACE_KEY);
+}
+
+async function request<T>(
+  path: string,
+  options: { method?: string; body?: unknown; auth?: boolean } = {},
+): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+  const token = getStoredToken();
+  if (options.auth !== false && token)
+    headers.Authorization = `Bearer ${token}`;
+  const workspaceId = getStoredWorkspaceId();
+  if (options.auth !== false && workspaceId) headers['X-Workspace-Id'] = workspaceId;
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: options.method ?? 'GET',
+      headers,
+      ...(options.body !== undefined
+        ? { body: JSON.stringify(options.body) }
+        : {}),
+    });
+  } catch {
+    throw new ApiError(
+      'Could not reach FLOW-UP. Check that the backend is running.',
+      'NETWORK_ERROR',
+      0,
+    );
+  }
+  const result = (await response.json()) as {
+    success: boolean;
+    data?: T;
+    error?: { code?: string; message?: string };
+  };
+  if (!response.ok || !result.success) {
+    const code = result.error?.code ?? 'REQUEST_FAILED';
+    if (response.status === 401 && options.auth !== false) clearToken();
+    throw new ApiError(
+      result.error?.message ?? `Request failed (${response.status}).`,
+      code,
+      response.status,
+    );
+  }
+  return result.data as T;
+}
+
+const get = <T>(path: string) => request<T>(path);
+const post = <T>(path: string, body?: unknown) =>
+  request<T>(path, { method: 'POST', body: body ?? {} });
+const patch = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: 'PATCH', body });
+const del = <T>(path: string) => request<T>(path, { method: 'DELETE' });
+
+export const api = {
+  register: (email: string, password: string) =>
+    request<{
+      status: string;
+      token: string | null;
+      user?: UserContext;
+      email?: string;
+    }>('/api/auth/register', {
+      method: 'POST',
+      auth: false,
+      body: { email, password },
+    }),
+  login: (email: string, password: string) =>
+    request<{ user: UserContext; token: string }>('/api/auth/login', {
+      method: 'POST',
+      auth: false,
+      body: { email, password },
+    }),
+  session: () => get<{ user: UserContext }>('/api/auth/session'),
+  logout: () => post<{ message: string }>('/api/auth/logout'),
+  initializeWorkspace: () => post<Workspace>('/api/workspaces/initialize'),
+  workspaces: () => get<Workspace[]>('/api/workspaces'),
+  createWorkspace: (name: string) => post<Workspace>('/api/workspaces', { name }),
+  deleteWorkspace: (id: string) => del<{ deleted: boolean }>(`/api/workspaces/${encodeURIComponent(id)}`),
+  currentWorkspace: () => get<Workspace>('/api/workspaces/current'),
+  workspaceOverview: () =>
+    get<{
+      workspace: Workspace;
+      projects: Project[];
+      goalSummary: { independentGoalCount: number } | null;
+    }>('/api/workspaces/overview'),
+  projects: () => get<Project[]>('/api/projects'),
+  createProject: (body: { name: string; description?: string }) =>
+    post<Project>('/api/projects', body),
+  project: (id: string) =>
+    get<Project>(`/api/projects/${encodeURIComponent(id)}`),
+  goals: (projectId?: string) =>
+    get<Goal[]>(
+      `/api/goals${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`,
+    ),
+  goal: (id: string) => get<Goal>(`/api/goals/${encodeURIComponent(id)}`),
+  hierarchy: (projectId?: string) =>
+    get<GoalNode[]>(
+      `/api/goals/hierarchy${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`,
+    ),
+  createGoal: (body: {
+    title: string;
+    description?: string;
+    targetDate?: string | null;
+    projectId?: string | null;
+    parentGoalId?: string | null;
+  }) => post<Goal>('/api/goals', body),
+  createChildGoal: (
+    parentId: string,
+    body: { title: string; description?: string; targetDate?: string | null },
+  ) => post<Goal>(`/api/goals/${encodeURIComponent(parentId)}/children`, body),
+  milestones: (goalId: string) =>
+    get<Milestone[]>(`/api/goals/${encodeURIComponent(goalId)}/milestones`),
+  createMilestone: (body: {
+    goalId: string;
+    title: string;
+    description?: string;
+    targetDate?: string | null;
+  }) => post<Milestone>('/api/milestones', body),
+  completeMilestone: (id: string) =>
+    post<Milestone>(`/api/milestones/${encodeURIComponent(id)}/complete`),
+  updateMilestone: (id: string, body: { title?: string; description?: string | null; targetDate?: string | null }) =>
+    patch<Milestone>(`/api/milestones/${encodeURIComponent(id)}`, body),
+  actions: (goalId: string) =>
+    get<Action[]>(`/api/goals/${encodeURIComponent(goalId)}/actions`),
+  createAction: (body: {
+    goalId: string;
+    milestoneId?: string | null;
+    title: string;
+    description?: string;
+  }) => post<Action>('/api/actions', body),
+  updateActionStatus: (id: string, status: ActionStatus) =>
+    patch<Action>(`/api/actions/${encodeURIComponent(id)}/status`, { status }),
+  updateAction: (id: string, body: { title?: string; description?: string | null }) =>
+    patch<Action>(`/api/actions/${encodeURIComponent(id)}`, body),
+  recordExecution: (
+    id: string,
+    body: {
+      actualStartedAt?: string | null;
+      actualCompletedAt?: string | null;
+      executionNote?: string | null;
+    },
+  ) =>
+    post<Execution>(`/api/actions/${encodeURIComponent(id)}/execution`, body),
+  execution: (id: string) =>
+    get<Execution | null>(`/api/actions/${encodeURIComponent(id)}/execution`),
+  progress: (goalId: string) =>
+    get<ProgressSummary>(`/api/progress/goals/${encodeURIComponent(goalId)}`),
+  measurements: (goalId: string) =>
+    get<Measurement[]>(`/api/goals/${encodeURIComponent(goalId)}/measurements`),
+  createMeasurement: (body: { goalId: string; label: string; valueType: Measurement['valueType']; unit?: string | null; targetValue?: number | string | boolean | null }) =>
+    post<Measurement>('/api/measurements', body),
+  updateMeasurement: (id: string, body: { label?: string; unit?: string | null; targetValue?: number | string | boolean | null }) =>
+    patch<Measurement>(`/api/measurements/${encodeURIComponent(id)}`, body),
+  archiveMeasurement: (id: string) => del<Measurement>(`/api/measurements/${encodeURIComponent(id)}`),
+  measurementHistory: (id: string) => get<MeasurementRecord[]>(`/api/measurements/${encodeURIComponent(id)}/history`),
+  recordMeasurement: (id: string, body: { value: number | string | boolean; note?: string }) =>
+    post<MeasurementRecord>(`/api/measurements/${encodeURIComponent(id)}/records`, body),
+  understandGoal: (input: string) => post<AIClarification>('/api/ai/goal-understanding', { input }),
+  assessGoalFeasibility: (input: string) => post<AIFeasibility>('/api/ai/feasibility', { input }),
+  proposeGoalStructure: (input: string) => post<AIProposal>('/api/ai/goal-proposals', { input }),
+  getAIProposal: (id: string) => get<AIProposal>(`/api/ai/proposals/${encodeURIComponent(id)}`),
+  applyAIProposal: (id: string, selection: { selectedItemIds: string[]; editedData: unknown }) =>
+    post<{ proposalId: string; status: string; operations: { operation: string; success: boolean; entityId?: string; errorCode?: string }[] }>(`/api/ai/proposals/${encodeURIComponent(id)}/apply`, { selection }),
+  rejectAIProposal: (id: string) => post<AIProposal>(`/api/ai/proposals/${encodeURIComponent(id)}/reject`),
+  createDailyPlan: (date: string) =>
+    post<DailyPlan>('/api/planning/daily-plans', { date }),
+  dailyPlan: (date: string) =>
+    get<{ dailyPlan: DailyPlan; schedules: Schedule[] }>(
+      `/api/planning/daily-plans/${encodeURIComponent(date)}`,
+    ),
+  schedules: (startDate: string, endDate: string) =>
+    get<Schedule[]>(
+      `/api/planning/schedules?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
+    ),
+  createSchedule: (body: {
+    actionId: string;
+    startAt: string;
+    endAt: string;
+    dailyPlanId?: string | null;
+  }) => post<Schedule>('/api/planning/schedules', body),
+  updateSchedule: (id: string, body: { startAt?: string; endAt?: string; dailyPlanId?: string | null }) =>
+    patch<Schedule>(`/api/planning/schedules/${encodeURIComponent(id)}`, body),
+  deleteSchedule: (id: string) =>
+    del<{ deleted: boolean }>(
+      `/api/planning/schedules/${encodeURIComponent(id)}`,
+    ),
+};
+
+
+
+
+============================================================
+FILE: tests/app.test.tsx
+============================================================
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { App } from '../src/app/App';
+import { PlanningCalendar } from '../src/planning/PlanningCalendar';
+
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+  vi.restoreAllMocks();
+});
+
+async function openWorkspaceFromManager() {
+  await screen.findByRole('heading', { name: 'Your workspaces' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Open workspace' }));
+  await screen.findByRole('heading', { name: 'Your space to grow' });
+}
+
+describe('FLOW-UP application', () => {
+  it('manages multiple workspaces, opens one in its own scope, and deletes another', async () => {
+    sessionStorage.setItem('flow-up.access-token', 'session-token');
+    let workspaces = [
+      { id: 'ws-old', userId: 'user-1', name: 'Old space', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+    ];
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      let data: unknown = [];
+      if (url.endsWith('/api/auth/session')) data = { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } };
+      else if (url.endsWith('/api/workspaces') && method === 'GET') data = workspaces;
+      else if (url.endsWith('/api/workspaces') && method === 'POST') {
+        const body = JSON.parse(String(init?.body));
+        const created = { id: 'ws-new', userId: 'user-1', name: body.name, createdAt: '2026-02-01', updatedAt: '2026-02-01' };
+        workspaces = [...workspaces, created];
+        data = created;
+      } else if (url.endsWith('/api/workspaces/ws-old') && method === 'DELETE') {
+        workspaces = workspaces.filter((item) => item.id !== 'ws-old');
+        data = { deleted: true };
+      } else if (url.endsWith('/api/workspaces/overview')) {
+        data = { workspace: { ...workspaces.find((item) => item.id === (init?.headers as Record<string, string>)?.['X-Workspace-Id'])! }, projects: [], goalSummary: null };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true, data }) };
+    }));
+
+    render(<App />);
+    await screen.findByText('Old space');
+    fireEvent.change(screen.getByLabelText('Workspace name'), { target: { value: 'Research' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
+    await screen.findByText('Research');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open workspace' })[1]);
+    await screen.findByRole('heading', { name: 'Your space to grow' });
+    expect(fetch).toHaveBeenCalledWith('/api/workspaces/overview', expect.objectContaining({ headers: expect.objectContaining({ 'X-Workspace-Id': 'ws-new' }) }));
+
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Workspaces/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/workspaces/ws-old', expect.objectContaining({ method: 'DELETE' })));
+    expect(screen.queryByText('Old space')).not.toBeInTheDocument();
+  });
+
+  it('renders the sign-in screen for a new session', () => {
+    render(<App />);
+    expect(
+      screen.getByRole('heading', { name: 'Welcome back' }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Email address')).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+  });
+
+  it('switches to registration without leaving the page', () => {
+    render(<App />);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Create an account' }),
+    );
+    expect(
+      screen.getByRole('heading', { name: 'Create your account' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Create account' }),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the workspace shell after restoring an authenticated session', async () => {
+    sessionStorage.setItem('flow-up.access-token', 'session-token');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const data = url.endsWith('/api/auth/session')
+          ? {
+              user: {
+                userId: 'user-1',
+                email: 'person@example.com',
+                isAuthenticated: true,
+              },
+            }
+          : url.endsWith('/api/workspaces')
+            ? [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }]
+            : url.endsWith('/api/workspaces/overview')
+            ? {
+                workspace: {
+                  id: 'ws-1',
+                  userId: 'user-1',
+                  name: 'Personal Workspace',
+                  createdAt: '',
+                  updatedAt: '',
+                },
+                projects: [],
+                goalSummary: null,
+              }
+            : url.endsWith('/api/goals/hierarchy')
+              ? []
+              : [];
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data }),
+        };
+      }),
+    );
+    render(<App />);
+    await openWorkspaceFromManager();
+    expect(screen.getByText('Personal Workspace')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/auth/session',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer session-token',
+        }),
+      }),
+    );
+  });
+
+  it('loads the home completed-action count from saved actions', async () => {
+    sessionStorage.setItem('flow-up.access-token', 'session-token');
+    const goal = {
+      id: 'goal-1', workspaceId: 'ws-1', projectId: null, parentGoalId: null,
+      title: 'Learn Spanish', description: null, targetDate: null, status: 'ACTIVE',
+      createdAt: '', updatedAt: '', archivedAt: null,
+    };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const data = url.endsWith('/api/auth/session')
+        ? { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } }
+        : url.endsWith('/api/workspaces') ? [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }]
+          : url.endsWith('/api/workspaces/overview')
+          ? { workspace: { id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }, projects: [], goalSummary: null }
+          : url.endsWith('/api/goals/hierarchy') ? [{ goal, children: [] }]
+            : url.endsWith('/api/goals') ? [goal]
+              : url.endsWith('/api/goals/goal-1/actions') ? [
+                  { id: 'action-1', status: 'COMPLETED' },
+                  { id: 'action-2', status: 'TODO' },
+                ]
+                : [];
+      return { ok: true, status: 200, json: async () => ({ success: true, data }) };
+    }));
+
+    render(<App />);
+    await openWorkspaceFromManager();
+    const label = (await screen.findAllByText('COMPLETED ACTIONS'))[0];
+    expect(label.parentElement).toHaveTextContent('1');
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/goals/goal-1/actions', expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('creates a measurement and records a value inside its Goal', async () => {
+    sessionStorage.setItem('flow-up.access-token', 'session-token');
+    const goal = {
+      id: 'goal-measure', workspaceId: 'ws-1', projectId: null, parentGoalId: null,
+      title: 'Build a running habit', description: null, targetDate: null, status: 'ACTIVE',
+      createdAt: '', updatedAt: '', archivedAt: null,
+    };
+    let measurement: Record<string, unknown> | null = null;
+    const records: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      let data: unknown = [];
+      if (url.endsWith('/api/auth/session')) data = { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } };
+      else if (url.endsWith('/api/workspaces')) data = [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }];
+      else if (url.endsWith('/api/workspaces/overview')) data = { workspace: { id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }, projects: [], goalSummary: null };
+      else if (url.endsWith('/api/goals/hierarchy')) data = [{ goal, children: [] }];
+      else if (url.endsWith('/api/goals')) data = [goal];
+      else if (url.endsWith('/api/progress/goals/goal-measure')) data = { goalId: goal.id, calculationStatus: 'RULE_NOT_CONFIGURED', goalProgress: { goalId: goal.id, progressValue: null, calculationStatus: 'RULE_NOT_CONFIGURED' }, actionCompletion: null, measurementProgress: [], childGoalProgress: [] };
+      else if (url.endsWith('/api/goals/goal-measure/measurements')) data = measurement ? [measurement] : [];
+      else if (url.endsWith('/history')) data = [...records];
+      else if (url === '/api/measurements' && method === 'POST') {
+        const body = JSON.parse(String(init?.body));
+        measurement = { id: 'measurement-1', goalId: goal.id, label: body.label, description: null, valueType: body.valueType, unit: body.unit, targetValue: body.targetValue, createdAt: '', updatedAt: '', archivedAt: null };
+        data = measurement;
+      } else if (url.endsWith('/records') && method === 'POST') {
+        const body = JSON.parse(String(init?.body));
+        const record = { id: 'record-1', measurementId: 'measurement-1', value: body.value, recordedAt: '2026-11-18T10:00:00.000Z', createdAt: '', note: null };
+        records.unshift(record);
+        data = record;
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true, data }) };
+    }));
+
+    render(<App />);
+    await openWorkspaceFromManager();
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Goals/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Build a running habit/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '+ Add' }));
+    fireEvent.change(screen.getByLabelText('What will you measure?'), { target: { value: 'Runs per week' } });
+    fireEvent.change(screen.getByLabelText('Unit (optional)'), { target: { value: 'runs' } });
+    fireEvent.change(screen.getByLabelText('Target (optional)'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save measurement' }));
+    await screen.findByText('Runs per week');
+    fireEvent.change(screen.getByLabelText('Record value'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Record' }));
+    expect(await screen.findByText('2 runs')).toBeInTheDocument();
+  });
+
+  it('opens an evidence-based Goal review with separate outcome and action progress', async () => {
+    sessionStorage.setItem('flow-up.access-token', 'session-token');
+    const goal = {
+      id: 'goal-review', workspaceId: 'ws-1', projectId: null, parentGoalId: null,
+      title: 'Run a 5K', description: null, targetDate: null, status: 'ACTIVE',
+      createdAt: '', updatedAt: '', archivedAt: null,
+    };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const data = url.endsWith('/api/auth/session')
+        ? { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } }
+        : url.endsWith('/api/workspaces') ? [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }]
+          : url.endsWith('/api/workspaces/overview')
+          ? { workspace: { id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }, projects: [], goalSummary: null }
+          : url.endsWith('/api/goals/hierarchy') ? [{ goal, children: [] }]
+            : url.endsWith('/api/goals') ? [goal]
+              : url.endsWith('/api/progress/goals/goal-review') ? { goalId: goal.id, goalProgress: { goalId: goal.id, progressValue: null, calculationStatus: 'RULE_NOT_CONFIGURED' }, actionCompletion: { totalActions: 2, completedActions: 1, incompleteActions: 1, completionValue: 50, calculationStatus: 'CALCULATED' }, measurementProgress: [], childGoalProgress: [] }
+                : url.endsWith('/api/goals/goal-review/actions') ? [{ id: 'action-review', goalId: goal.id, title: 'Complete first run', status: 'COMPLETED', archivedAt: null }]
+                  : url.endsWith('/api/goals/goal-review/measurements') ? [{ id: 'measurement-review', goalId: goal.id, label: 'Distance', valueType: 'NUMBER', unit: 'km', targetValue: 5, archivedAt: null }]
+                    : url.endsWith('/api/actions/action-review/execution') ? { actionId: 'action-review', actualCompletedAt: '2026-11-17T09:00:00Z', executionNote: 'Ran in the park' }
+                      : url.endsWith('/api/measurements/measurement-review/history') ? [{ id: 'record-review', measurementId: 'measurement-review', value: 2.5, recordedAt: '2026-11-17T09:00:00Z', note: null }]
+                        : [];
+      return { ok: true, status: 200, json: async () => ({ success: true, data }) };
+    }));
+
+    render(<App />);
+    await openWorkspaceFromManager();
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Review/ }));
+    expect(await screen.findByRole('heading', { name: 'Run a 5K' })).toBeInTheDocument();
+    expect(screen.getByText('Not configured')).toBeInTheDocument();
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+    expect(await screen.findByText('Ran in the park')).toBeInTheDocument();
+    expect(await screen.findByText('2.5 km')).toBeInTheDocument();
+  });
+
+  it('loads scheduled work, moves a session, and schedules an open Action from the calendar', async () => {
+    const goals = [{ id: 'goal-calendar', title: 'Build a running habit' }] as never[];
+    const actions = [
+      { id: 'action-scheduled', goalId: 'goal-calendar', milestoneId: null, title: 'Morning run', description: null, status: 'IN_PROGRESS', archivedAt: null },
+      { id: 'action-open', goalId: 'goal-calendar', milestoneId: null, title: 'Prepare running shoes', description: null, status: 'TODO', archivedAt: null },
+    ] as never[];
+    let records = [{ id: 'schedule-1', actionId: 'action-scheduled', dailyPlanId: 'plan-1', startAt: '2026-11-18T09:00:00.000Z', endAt: '2026-11-18T10:00:00.000Z' }];
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      let data: unknown = records;
+      if (url.startsWith('/api/planning/schedules?')) data = records;
+      else if (url === '/api/planning/schedules/schedule-1' && method === 'PATCH') {
+        const body = JSON.parse(String(init?.body));
+        records = records.map((item) => item.id === 'schedule-1' ? { ...item, ...body } : item);
+        data = records[0];
+      } else if (url === '/api/planning/schedules' && method === 'POST') {
+        const body = JSON.parse(String(init?.body));
+        const created = { id: 'schedule-2', ...body };
+        records = [...records, created]; data = created;
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true, data }) };
+    }));
+    render(<PlanningCalendar actions={actions} goals={goals} actionsLoaded actionsLoadError={false} initialDate="2026-11-18" onRefreshActions={vi.fn()} onOpenGoal={vi.fn()} onLogExecution={vi.fn()} />);
+
+    await waitFor(() => expect(screen.queryByText('Loading schedules…')).not.toBeInTheDocument());
+    expect(await screen.findByText('Morning run')).toBeInTheDocument();
+    expect(screen.getByText('Prepare running shoes')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Month' }));
+    expect(await screen.findByRole('heading', { name: 'November 2026' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Wednesday, November 18' }));
+    expect(await screen.findByRole('heading', { name: 'Wednesday, November 18, 2026' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Day' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit time' }));
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-11-19' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save time' }));
+    await screen.findByText('Thursday, November 19, 2026');
+    expect(fetch).toHaveBeenCalledWith('/api/planning/schedules/schedule-1', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('"dailyPlanId":null') }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to calendar' }));
+    await screen.findByText('2 scheduled');
+    expect(fetch).toHaveBeenCalledWith('/api/planning/schedules', expect.objectContaining({ method: 'POST', body: expect.stringContaining('"actionId":"action-open"') }));
+  });
+
+  it('runs the structured goal discovery path and displays proposal items separately', async () => {
+    sessionStorage.setItem('flow-up.access-token', 'session-token');
+    const proposal = {
+      id: 'proposal-1', status: 'PENDING_REVIEW',
+      proposalData: { summary: 'A manageable first plan', provenance: 'AI_PROPOSED', items: [
+        { id: 'goal-1', type: 'GOAL', title: 'Learn Spanish', description: '', targetDate: null, parentItemId: null, rationale: 'Outcome' },
+      ] },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const data = url.endsWith('/api/auth/session')
+        ? { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } }
+        : url.endsWith('/api/workspaces') ? [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }]
+          : url.endsWith('/api/workspaces/overview')
+          ? { workspace: { id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }, projects: [], goalSummary: null }
+          : url.endsWith('/api/goals/hierarchy') ? []
+            : url.endsWith('/api/ai/goal-understanding')
+              ? { outcome: 'Learn conversational Spanish', successCriteria: [], knownFacts: ['You want to learn Spanish'], assumptions: [], missingInformation: ['Available time'], questions: [], provenance: 'NEEDS_CONFIRMATION' }
+              : url.endsWith('/api/ai/feasibility')
+                ? { assessment: 'INSUFFICIENT_INFORMATION', summary: 'Time available is unknown.', concerns: [], alternatives: [], assumptions: [], missingInformation: ['Available time'], provenance: 'AI_PROPOSED' }
+                : url.endsWith('/api/ai/goal-proposals') ? proposal : [];
+      return { ok: true, status: 200, json: async () => ({ success: true, data }) };
+    }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /Goal discovery/ }));
+    fireEvent.change(screen.getByLabelText('Your goal and any useful context'), { target: { value: 'I want to learn Spanish.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Understand my goal' }));
+    expect(await screen.findByRole('heading', { name: 'Learn conversational Spanish' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Review feasibility' }));
+    expect(await screen.findByText('Time available is unknown.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Build a goal structure proposal' }));
+    expect(await screen.findByRole('heading', { name: 'Review the suggested structure' })).toBeInTheDocument();
+    expect(screen.getByText('AI PROPOSAL · NOT SAVED')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Learn Spanish')).toBeInTheDocument();
+  });
+});
+
+

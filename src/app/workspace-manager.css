@@ -1,21 +1,204 @@
-.workspace-manager { display: grid; gap: 1.5rem; }
-.workspace-manager__create, .workspace-manager__item, .workspace-manager__empty { border: 1px solid var(--line, #e7e6e1); border-radius: 18px; background: var(--surface, #fff); }
-.workspace-manager__create { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(320px, 1.2fr); align-items: end; gap: 1.5rem; padding: 1.5rem; }
-.workspace-manager__create h2, .workspace-manager__heading h2 { margin: 0; font-size: 1.1rem; }
-.workspace-manager__create p { margin: .45rem 0 0; color: var(--muted, #777); font-size: .9rem; }
-.workspace-manager__form { display: flex; align-items: end; gap: .75rem; }
-.workspace-manager__form .field { flex: 1; }
-.workspace-manager__heading { display: flex; justify-content: space-between; align-items: baseline; }
-.workspace-manager__heading span { color: var(--muted, #777); font-size: .88rem; }
-.workspace-manager__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: .9rem; }
-.workspace-manager__item { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: .8rem; padding: 1.1rem; }
-.workspace-manager__mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: #eff3e8; color: #526243; font-size: 1.3rem; }
-.workspace-manager__details { min-width: 0; }
-.workspace-manager__details h3 { margin: 0; overflow-wrap: anywhere; font-size: 1rem; }
-.workspace-manager__details p { margin: .35rem 0 0; color: var(--muted, #777); font-size: .8rem; }
-.workspace-manager__actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: .6rem; padding-top: .35rem; }
-.workspace-manager__empty { padding: 3rem 1.5rem; text-align: center; }
-.workspace-manager__empty > span { font-size: 2rem; color: #71815e; }
-.workspace-manager__empty h3 { margin: .7rem 0 .35rem; }
-.workspace-manager__empty p { max-width: 28rem; margin: 0 auto; color: var(--muted, #777); }
-@media (max-width: 700px) { .workspace-manager__create { grid-template-columns: 1fr; } .workspace-manager__form { align-items: stretch; flex-direction: column; } .workspace-manager__actions { justify-content: stretch; } .workspace-manager__actions > * { flex: 1; } }
+/* Workspace Manager — top-level workspace collection */
+.workspace-manager {
+  display: grid;
+  gap: 1.25rem;
+}
+
+/* Workspace list heading and search */
+.workspace-manager__heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1.25rem;
+}
+
+.workspace-manager__heading > div:first-child {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.workspace-manager__heading h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  line-height: 1.35;
+}
+
+.workspace-manager__heading span {
+  color: var(--muted, #777);
+  font-size: 0.88rem;
+}
+
+.workspace-manager__heading .field {
+  width: min(310px, 100%);
+  margin: 0;
+}
+
+/* Workspace cards */
+.workspace-manager__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 0.9rem;
+}
+
+.workspace-manager__item {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 1.1rem;
+  border: 1px solid var(--line, #e7e6e1);
+  border-radius: 18px;
+  background: var(--surface, #fff);
+}
+
+.workspace-manager__mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: #eff3e8;
+  color: #526243;
+  font-size: 1.3rem;
+}
+
+.workspace-manager__details {
+  min-width: 0;
+}
+
+.workspace-manager__details h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.workspace-manager__details p {
+  margin: 0.35rem 0 0;
+  color: var(--muted, #777);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.workspace-manager__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding-top: 0.35rem;
+}
+
+/* Empty and no-search-results states */
+.workspace-manager__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  min-height: 245px;
+  padding: 2.5rem 1.5rem;
+  border: 1px solid var(--line, #e7e6e1);
+  border-radius: 18px;
+  background: var(--surface, #fff);
+  text-align: center;
+}
+
+.workspace-manager__empty > span {
+  display: block;
+  margin: 0;
+  color: #71815e;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.workspace-manager__empty h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  line-height: 1.4;
+}
+
+.workspace-manager__empty p {
+  width: min(100%, 28rem);
+  margin: 0;
+  color: var(--muted, #777);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+.workspace-manager__empty > button {
+  margin-top: 0.15rem;
+}
+
+.workspace-manager__empty--compact {
+  min-height: 180px;
+  padding: 2rem 1.5rem;
+}
+
+/* Workspace manager is a separate top-level area, not part of a workspace dashboard. */
+.app-layout--workspace-manager .main-area {
+  margin-left: 0;
+}
+
+.app-layout--workspace-manager .page-content {
+  max-width: 1180px;
+  padding-top: clamp(34px, 5vh, 58px);
+}
+
+.app-layout--workspace-manager .page-heading {
+  align-items: flex-start;
+  margin-bottom: 30px;
+}
+
+.app-layout--workspace-manager .page-heading h1 {
+  font-size: clamp(30px, 3vw, 38px);
+}
+
+.app-layout--workspace-manager .menu-toggle {
+  display: none;
+}
+
+/* Workspace switcher inside an opened workspace dashboard */
+.workspace-switch {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.workspace-switch:hover {
+  border-color: #d7e2d8;
+  background: #f8faf7;
+}
+
+.workspace-switch:focus-visible {
+  outline: 3px solid rgba(87, 137, 108, 0.28);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .app-layout--workspace-manager .page-content {
+    padding-top: 28px;
+  }
+
+  .workspace-manager__heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workspace-manager__heading .field {
+    width: 100%;
+  }
+}
+
+@media (max-width: 700px) {
+  .workspace-manager__actions {
+    justify-content: stretch;
+  }
+
+  .workspace-manager__actions > * {
+    flex: 1;
+  }
+}
