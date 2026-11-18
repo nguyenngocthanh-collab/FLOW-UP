@@ -15,7 +15,9 @@ import {
   ApiError,
   clearToken,
   getStoredToken,
+  getStoredWorkspaceId,
   saveToken,
+  saveWorkspaceId,
   type Action,
   type ActionStatus,
   type AIClarification,
@@ -36,9 +38,10 @@ import {
 } from '../lib/api';
 import '../assistant.css';
 import '../measurement.css';
+import './workspace-manager.css';
 import { PlanningCalendar } from '../planning/PlanningCalendar';
 
-type Page = 'home' | 'projects' | 'goals' | 'planning' | 'review' | 'assistant';
+type Page = 'workspaces' | 'home' | 'projects' | 'goals' | 'planning' | 'review' | 'assistant';
 type Notice = { kind: 'success' | 'error'; text: string } | null;
 function messageOf(error: unknown): string {
   return error instanceof Error
@@ -295,6 +298,7 @@ function Sidebar({
   closeMobile: () => void;
 }) {
   const items: { id: Page; label: string; icon: string }[] = [
+    { id: 'workspaces', label: 'Workspaces', icon: '⌂' },
     { id: 'assistant', label: 'Goal discovery', icon: 'AI' },
     { id: 'home', label: 'Overview', icon: '◫' },
     { id: 'projects', label: 'Projects', icon: '▦' },
@@ -678,11 +682,14 @@ function GoalReviewPage({ goals, initialGoalId }: { goals: Goal[]; initialGoalId
 export function App() {
   const [user, setUser] = useState<UserContext | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [baseDataLoaded, setBaseDataLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [hierarchy, setHierarchy] = useState<GoalNode[]>([]);
-  const [page, setPage] = useState<Page>('home');
+  const [page, setPage] = useState<Page>('workspaces');
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
@@ -773,6 +780,30 @@ export function App() {
     return overview;
   }, []);
 
+  const refreshWorkspaces = useCallback(async () => {
+    const result = await api.workspaces();
+    setWorkspaces(result);
+    return result;
+  }, []);
+
+  const openWorkspace = useCallback(async (selected: Workspace) => {
+    saveWorkspaceId(selected.id);
+    setWorkspace(selected);
+    setActionRefresh((value) => value + 1);
+    setScheduleRefresh((value) => value + 1);
+    setSelectedProject(null);
+    setSelectedGoal(null);
+    setWorkspaceBusy(true);
+    try {
+      await loadBase();
+      setPage('home');
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }, [handleError, loadBase]);
+
   useEffect(() => {
     if (!getStoredToken()) return;
     let active = true;
@@ -781,7 +812,10 @@ export function App() {
         const result = await api.session();
         if (!active) return;
         setUser(result.user);
-        await loadBase();
+        setPage('workspaces');
+        const available = await refreshWorkspaces();
+        const selectedId = getStoredWorkspaceId();
+        if (selectedId && !available.some((item) => item.id === selectedId)) saveWorkspaceId(null);
       } catch (error) {
         if (active) {
           clearToken();
@@ -794,7 +828,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [handleError, loadBase]);
+  }, [handleError, refreshWorkspaces]);
 
   useEffect(() => {
     if (!user || !selectedGoal) {
@@ -917,27 +951,60 @@ export function App() {
   async function authenticated(userContext: UserContext) {
     setUser(userContext);
     try {
-      await loadBase();
+      saveWorkspaceId(null);
+      setWorkspace(null);
+      setPage('workspaces');
+      await refreshWorkspaces();
       notify({
         kind: 'success',
-        text: 'You’re signed in. Your workspace is ready.',
+        text: 'You’re signed in. Choose a workspace or create one to get started.',
       });
     } catch (error) {
       handleError(error);
     }
   }
 
-  async function initializeWorkspace() {
-    setBusy(true);
+  async function createWorkspace() {
+    const name = workspaceName.trim();
+    if (!name) return;
+    setWorkspaceBusy(true);
     try {
-      const result = await api.initializeWorkspace();
-      setWorkspace(result);
-      await loadBase();
-      notify({ kind: 'success', text: 'Workspace is ready.' });
+      const created = await api.createWorkspace(name);
+      setWorkspaceName('');
+      const updated = await refreshWorkspaces();
+      setWorkspaces(updated);
+      notify({ kind: 'success', text: `${created.name} created.` });
     } catch (error) {
       handleError(error);
     } finally {
-      setBusy(false);
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function deleteWorkspace(selected: Workspace) {
+    const confirmed = window.confirm(`Delete “${selected.name}” and all of its Projects, Goals, Actions, schedules, and measurements? This cannot be undone.`);
+    if (!confirmed) return;
+    setWorkspaceBusy(true);
+    try {
+      await api.deleteWorkspace(selected.id);
+      if (getStoredWorkspaceId() === selected.id) {
+        saveWorkspaceId(null);
+        setWorkspace(null);
+        setProjects([]);
+        setGoals([]);
+        setHierarchy([]);
+        setSelectedProject(null);
+        setSelectedGoal(null);
+        setAvailableActions([]);
+        setUpcomingSchedules([]);
+        setPage('workspaces');
+      }
+      await refreshWorkspaces();
+      notify({ kind: 'success', text: `${selected.name} deleted.` });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setWorkspaceBusy(false);
     }
   }
 
@@ -956,6 +1023,7 @@ export function App() {
     setSelectedGoal(null);
     setSelectedProject(null);
     setPage('home');
+    setWorkspaces([]);
   }
 
   async function submitProject(event: FormEvent<HTMLFormElement>) {
@@ -1243,7 +1311,9 @@ export function App() {
     );
 
   const pageTitle =
-    page === 'home'
+    page === 'workspaces'
+      ? 'Your workspaces'
+      : page === 'home'
       ? 'Your space to grow'
       : page === 'projects'
         ? 'Projects'
@@ -1253,7 +1323,9 @@ export function App() {
             ? 'Goal discovery'
             : page === 'review' ? 'Review your progress' : 'Plan your day';
   const pageSubtitle =
-    page === 'home'
+    page === 'workspaces'
+      ? 'Create separate spaces for different parts of your work, then open the one you want to focus on.'
+      : page === 'home'
       ? 'A little progress adds up to a lot.'
       : page === 'projects'
         ? 'Shape your ideas into focused projects.'
@@ -1307,7 +1379,7 @@ export function App() {
           <div className="page-heading">
             <div>
               <span className="eyebrow">
-                {page === 'home' ? 'MONDAY MOMENTUM' : 'YOUR WORKSPACE'}
+                {page === 'workspaces' ? 'A CLEAN START' : page === 'home' ? 'MONDAY MOMENTUM' : 'YOUR WORKSPACE'}
               </span>
               <h1>{pageTitle}</h1>
               <p>{pageSubtitle}</p>
@@ -1349,16 +1421,35 @@ export function App() {
             )}
           </div>
 
-          {!workspace && (
-            <section className="welcome-card">
-              <div className="welcome-card__icon">⌂</div>
-              <div>
-                <h2>Your personal workspace is ready to begin</h2>
-                <p>Set up a private place for your projects and goals.</p>
-              </div>
-              <Button onClick={initializeWorkspace} disabled={busy}>
-                {busy ? 'Setting up…' : 'Create workspace'}
-              </Button>
+          {page === 'workspaces' && (
+            <section className="workspace-manager" aria-label="Workspace manager">
+              <form className="workspace-manager__create" onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}>
+                <div>
+                  <h2>Create a workspace</h2>
+                  <p>Keep personal goals, a team initiative, or a side project in its own space.</p>
+                </div>
+                <div className="workspace-manager__form">
+                  <Field label="Workspace name" value={workspaceName} maxLength={80} placeholder="For example, Personal goals" onChange={(event) => setWorkspaceName(event.target.value)} />
+                  <Button type="submit" disabled={workspaceBusy || !workspaceName.trim()}>{workspaceBusy ? 'Working…' : 'Create workspace'}</Button>
+                </div>
+              </form>
+              <div className="workspace-manager__heading"><h2>Your spaces</h2><span>{workspaces.length} {workspaces.length === 1 ? 'workspace' : 'workspaces'}</span></div>
+              {workspaces.length ? (
+                <div className="workspace-manager__grid">
+                  {workspaces.map((item) => (
+                    <article className="workspace-manager__item" key={item.id}>
+                      <span className="workspace-manager__mark">⌂</span>
+                      <div className="workspace-manager__details"><h3>{item.name}</h3><p>Created {dateLabel(item.createdAt.slice(0, 10))}{workspace?.id === item.id ? ' · currently open' : ''}</p></div>
+                      <div className="workspace-manager__actions">
+                        <Button variant={workspace?.id === item.id ? 'secondary' : 'primary'} disabled={workspaceBusy} onClick={() => void openWorkspace(item)}>{workspace?.id === item.id ? 'Open again' : 'Open workspace'}</Button>
+                        <Button variant="danger" disabled={workspaceBusy} onClick={() => void deleteWorkspace(item)}>Delete</Button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="workspace-manager__empty"><span>⌂</span><h3>A clean start</h3><p>Create a workspace when you are ready. Your goals and projects will live inside it.</p></div>
+              )}
             </section>
           )}
 

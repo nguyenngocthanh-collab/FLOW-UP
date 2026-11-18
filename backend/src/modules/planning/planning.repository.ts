@@ -14,7 +14,7 @@ export interface PlanningRepository {
   updateSchedule(id: ScheduleId, patch: Partial<Pick<ScheduleEntry,
     "startAt" | "endAt" | "dailyPlanId" | "updatedAt">>): Promise<ScheduleEntry>;
   deleteSchedule(id: ScheduleId): Promise<void>;
-  listSchedulesByDateRange(userId: string, range: PlanningDateRange): Promise<ScheduleEntry[]>;
+  listSchedulesByDateRange(userId: string, range: PlanningDateRange, workspaceId?: string): Promise<ScheduleEntry[]>;
   findOverlappingSchedules(userId: string, startAt: string, endAt: string, excludeScheduleId?: ScheduleId): Promise<ScheduleEntry[]>;
 }
 

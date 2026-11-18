@@ -31,6 +31,9 @@ function makeRepository(): WorkspaceRepository {
     getOrCreatePersonalWorkspace: vi.fn(async () => workspace),
     findWorkspaceByUserId: vi.fn(async () => workspace),
     findWorkspaceById: vi.fn(async () => workspace),
+    listWorkspacesByUserId: vi.fn(async () => [workspace]),
+    createWorkspace: vi.fn(async (_userId, name) => ({ ...workspace, id: "workspace-2", name })),
+    deleteWorkspace: vi.fn(async () => true),
     createProject: vi.fn(async () => project),
     findProjectById: vi.fn(async () => project),
     listProjectsByWorkspaceId: vi.fn(async () => [project]),
@@ -45,6 +48,23 @@ function makeRepository(): WorkspaceRepository {
 }
 
 describe("B02 workspace service", () => {
+  it("creates separately named workspaces for the authenticated owner", async () => {
+    const repository = makeRepository();
+    const service = createWorkspaceService(repository);
+    const result = await service.createWorkspace(user, "Research project");
+    expect(result).toMatchObject({ success: true, data: { name: "Research project", userId: "user-1" } });
+    expect(repository.createWorkspace).toHaveBeenCalledWith("user-1", "Research project");
+  });
+
+  it("does not delete a workspace owned by someone else", async () => {
+    const repository = makeRepository();
+    repository.findWorkspaceById = vi.fn(async () => ({ ...workspace, userId: "user-other" }));
+    const service = createWorkspaceService(repository);
+    const result = await service.deleteWorkspace(user, "workspace-other");
+    expect(result).toMatchObject({ success: false, error: { code: "WORKSPACE_ACCESS_DENIED" } });
+    expect(repository.deleteWorkspace).not.toHaveBeenCalled();
+  });
+
   it("initializes or retrieves the personal workspace through the repository", async () => {
     const repository = makeRepository();
     const service = createWorkspaceService(repository);

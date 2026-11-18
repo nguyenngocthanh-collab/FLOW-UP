@@ -4,6 +4,7 @@ const API_BASE_URL = (
   .replace(/\/api\/?$/, '')
   .replace(/\/$/, '');
 const TOKEN_KEY = 'flow-up.access-token';
+const WORKSPACE_KEY = 'flow-up.active-workspace';
 
 export interface UserContext {
   userId: string;
@@ -179,6 +180,14 @@ export function saveToken(token: string): void {
 }
 export function clearToken(): void {
   sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(WORKSPACE_KEY);
+}
+export function getStoredWorkspaceId(): string | null {
+  return sessionStorage.getItem(WORKSPACE_KEY);
+}
+export function saveWorkspaceId(workspaceId: string | null): void {
+  if (workspaceId) sessionStorage.setItem(WORKSPACE_KEY, workspaceId);
+  else sessionStorage.removeItem(WORKSPACE_KEY);
 }
 
 async function request<T>(
@@ -190,6 +199,8 @@ async function request<T>(
   const token = getStoredToken();
   if (options.auth !== false && token)
     headers.Authorization = `Bearer ${token}`;
+  const workspaceId = getStoredWorkspaceId();
+  if (options.auth !== false && workspaceId) headers['X-Workspace-Id'] = workspaceId;
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
@@ -251,6 +262,9 @@ export const api = {
   session: () => get<{ user: UserContext }>('/api/auth/session'),
   logout: () => post<{ message: string }>('/api/auth/logout'),
   initializeWorkspace: () => post<Workspace>('/api/workspaces/initialize'),
+  workspaces: () => get<Workspace[]>('/api/workspaces'),
+  createWorkspace: (name: string) => post<Workspace>('/api/workspaces', { name }),
+  deleteWorkspace: (id: string) => del<{ deleted: boolean }>(`/api/workspaces/${encodeURIComponent(id)}`),
   currentWorkspace: () => get<Workspace>('/api/workspaces/current'),
   workspaceOverview: () =>
     get<{

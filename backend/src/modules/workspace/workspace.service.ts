@@ -61,7 +61,12 @@ export function createWorkspaceService(
     if (!isTrustedUser(user)) return failure("WORKSPACE_UNAUTHENTICATED");
 
     try {
-      const workspace = await repository.findWorkspaceByUserId(user.userId);
+      const workspace = user.workspaceId
+        ? await repository.findWorkspaceById(user.workspaceId)
+        : await repository.findWorkspaceByUserId(user.userId);
+      if (workspace && workspace.userId !== user.userId) {
+        return failure("WORKSPACE_ACCESS_DENIED");
+      }
       return workspace
         ? success(workspace)
         : failure("WORKSPACE_NOT_FOUND");
@@ -81,8 +86,11 @@ export function createWorkspaceService(
       const project = await repository.findProjectById(projectId);
       if (!project) return failure("PROJECT_NOT_FOUND");
 
-      const workspace = await repository.findWorkspaceByUserId(user.userId);
+      const workspace = user.workspaceId
+        ? await repository.findWorkspaceById(user.workspaceId)
+        : await repository.findWorkspaceByUserId(user.userId);
       if (!workspace) return failure("WORKSPACE_NOT_FOUND");
+      if (workspace.userId !== user.userId) return failure("WORKSPACE_ACCESS_DENIED");
 
       if (project.workspaceId !== workspace.id) {
         return failure("PROJECT_ACCESS_DENIED");
@@ -95,6 +103,39 @@ export function createWorkspaceService(
   }
 
   return {
+    async listWorkspaces(user) {
+      if (!isTrustedUser(user)) return failure("WORKSPACE_UNAUTHENTICATED");
+      try {
+        return success(await repository.listWorkspacesByUserId(user.userId));
+      } catch (error) {
+        return normalizePersistenceError(error, "WORKSPACE_PROVIDER_ERROR");
+      }
+    },
+
+    async createWorkspace(user, name) {
+      if (!isTrustedUser(user)) return failure("WORKSPACE_UNAUTHENTICATED");
+      const normalizedName = typeof name === "string" ? name.trim() : "";
+      if (!normalizedName || normalizedName.length > 80) return failure("WORKSPACE_INVALID_NAME");
+      try {
+        return success(await repository.createWorkspace(user.userId, normalizedName));
+      } catch (error) {
+        return normalizePersistenceError(error, "WORKSPACE_PROVIDER_ERROR");
+      }
+    },
+
+    async deleteWorkspace(user, workspaceId) {
+      if (!isTrustedUser(user)) return failure("WORKSPACE_UNAUTHENTICATED");
+      if (!workspaceId?.trim()) return failure("WORKSPACE_NOT_FOUND");
+      try {
+        const workspace = await repository.findWorkspaceById(workspaceId);
+        if (!workspace) return failure("WORKSPACE_NOT_FOUND");
+        if (workspace.userId !== user.userId) return failure("WORKSPACE_ACCESS_DENIED");
+        return success(await repository.deleteWorkspace(workspaceId, user.userId));
+      } catch (error) {
+        return normalizePersistenceError(error, "WORKSPACE_PROVIDER_ERROR");
+      }
+    },
+
     async initializePersonalWorkspace(user) {
       if (!isTrustedUser(user)) return failure("WORKSPACE_UNAUTHENTICATED");
 

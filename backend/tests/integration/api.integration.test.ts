@@ -291,6 +291,54 @@ describe("FLOW-UP Backend API Integration Tests", () => {
     expect(updateProjData.data.name).toBe("IELTS 8.0 Mastery");
   });
 
+  it("creates, scopes, lists, and deletes multiple owned Workspaces", async () => {
+    const headers = {
+      Authorization: `Bearer ${userA.token}`,
+      "Content-Type": "application/json"
+    };
+    const create = await request("POST", "/api/workspaces", {
+      headers,
+      body: JSON.stringify({ name: "Side project" })
+    });
+    expect(create.status).toBe(201);
+    const created = await create.json<{ data: { id: string; name: string; userId: string } }>();
+    expect(created.data).toMatchObject({ name: "Side project", userId: "user-a" });
+
+    const list = await request("GET", "/api/workspaces", { headers });
+    const workspaces = await list.json<{ data: Array<{ id: string }> }>();
+    expect(workspaces.data.map((workspace) => workspace.id)).toContain(created.data.id);
+
+    const project = await request("POST", "/api/projects", {
+      headers: { ...headers, "X-Workspace-Id": created.data.id },
+      body: JSON.stringify({ name: "Scoped project" })
+    });
+    expect(project.status).toBe(201);
+    const projectData = await project.json<{ data: { id: string; workspaceId: string } }>();
+    expect(projectData.data.workspaceId).toBe(created.data.id);
+
+    const goal = await request("POST", "/api/goals", {
+      headers: { ...headers, "X-Workspace-Id": created.data.id },
+      body: JSON.stringify({ title: "Goal in side project" })
+    });
+    expect(goal.status).toBe(201);
+    const goalData = await goal.json<{ data: { id: string; workspaceId: string } }>();
+    expect(goalData.data.workspaceId).toBe(created.data.id);
+
+    const forbidden = await request("GET", "/api/workspaces/overview", {
+      headers: { Authorization: `Bearer ${userB.token}`, "X-Workspace-Id": created.data.id }
+    });
+    expect(forbidden.status).toBe(403);
+
+    const deleted = await request("DELETE", `/api/workspaces/${created.data.id}`, { headers });
+    expect(deleted.status).toBe(200);
+    expect(await app.container.repositories.workspace.findProjectById(projectData.data.id)).toBeNull();
+    expect(await app.container.repositories.goal.findGoalById(goalData.data.id)).toBeNull();
+    const projects = await request("GET", "/api/projects", {
+      headers: { ...headers, "X-Workspace-Id": created.data.id }
+    });
+    expect(projects.status).toBe(404);
+  });
+
   // FLOW 4: Create and retrieve Goal & hierarchy
   let createdGoalId: string;
   let childGoalId: string;

@@ -129,7 +129,7 @@ export class PlanningService {
   ): Promise<ScheduleEntry[]> {
     this.assertAuthenticated(user);
     validateDateRange(range);
-    return this.repository.listSchedulesByDateRange(user.userId, range);
+    return this.repository.listSchedulesByDateRange(user.userId, range, user.workspaceId);
   }
 
   async applyApprovedPlanningProposal(

@@ -49,7 +49,7 @@ export function createApiHandler(
       res.writeHead(204, {
         "Access-Control-Allow-Origin": corsOrigin,
         "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Workspace-Id",
         "Access-Control-Max-Age": "86400"
       });
       res.end();
@@ -79,6 +79,10 @@ export function createApiHandler(
       const token = extractBearerToken(req);
       if (token) {
         user = await container.tokenVerifier.verifyToken(token);
+        const selectedWorkspaceId = req.headers["x-workspace-id"];
+        if (user && typeof selectedWorkspaceId === "string" && selectedWorkspaceId.trim()) {
+          user = { ...user, workspaceId: selectedWorkspaceId.trim() };
+        }
       }
 
       if (match.requiresAuth && !user) {

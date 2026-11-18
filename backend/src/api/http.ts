@@ -14,7 +14,7 @@ export function sendJson(
     "Content-Length": Buffer.byteLength(jsonString),
     "Access-Control-Allow-Origin": corsOrigin,
     "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Workspace-Id",
     "Access-Control-Max-Age": "86400"
   });
   res.end(jsonString);

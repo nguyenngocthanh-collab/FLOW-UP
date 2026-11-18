@@ -12,6 +12,8 @@ export interface AuthenticatedUserContext {
   userId: string;
   email: string | null;
   isAuthenticated: true;
+  /** Selected by the client; every use must still verify workspace ownership. */
+  workspaceId?: string;
 }
 
 export type AuthenticationState =

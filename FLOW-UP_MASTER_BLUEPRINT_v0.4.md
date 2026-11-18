@@ -19567,3 +19567,18 @@ This update records verified B07 and connected UI changes. It does not introduce
 - Schedule conflict validation at the B07 service boundary checks current persisted user schedules. Concurrent schedule-write serialization is not guaranteed by the current repository contract.
 - The app has no user-configurable time-zone setting; Calendar renders in the browser's local zone while persisted instants remain ISO timestamps.
 - Daily Plan semantics, recurring Schedules, and persistent review notes remain as previously defined/open. AI Daily Planning is not implemented.
+
+## Implementation update — Multiple workspaces and account entry (2026-11-18)
+
+- Successful sign-in and registration now open a Workspace Manager. Users can create named workspaces, open/switch between them, and delete a workspace after an explicit warning that its Projects, Goals, Actions, Schedules, and Measurements are removed with it.
+- B02 remains the owner of Workspace creation, listing, and deletion. The authenticated user owns every workspace; the selected workspace ID is sent as request context and is always checked against that owner before scoped Workspace and Goal operations.
+- SQLite now allows multiple rows per user. Startup migrates the legacy `UNIQUE(user_id)` table by rebuilding only the Workspace table, preserving existing Workspace IDs, names, and dependent records. Foreign keys are checked in migration tests.
+- Calendar Schedule range reads use the selected workspace. Schedule conflict checks remain user-wide so time conflicts across a person's workspaces are still visible to B07.
+- Workspace remains a required scope for Projects and Goals in the current domain model. Removing that dependency would require a separate product and data migration decision and is not part of this Workspace Manager change.
+
+### Verification
+
+- Frontend: 9 application tests pass; production build and frontend typecheck pass.
+- Backend: 189 tests pass across 40 files; backend typecheck passes. API integration verifies create/list, selected Workspace scoping for Project and Goal creation, cross-user denial, and deletion.
+- A migration test starts from the legacy unique-owner schema and confirms existing Project relationships survive, foreign-key checks remain clear, and a second Workspace can be inserted.
+- Existing user data files were not used for migration testing.

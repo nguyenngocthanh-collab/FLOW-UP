@@ -25,7 +25,7 @@ export interface GoalRepository {
  * B02 boundary. Implement this adapter using B02 ownership validation operations.
  */
 export interface GoalWorkspaceAccess {
-  getCurrentWorkspaceId(userId: string): Promise<string | null>;
+  getCurrentWorkspaceId(userId: string, selectedWorkspaceId?: string): Promise<string | null>;
   validateProjectInWorkspace(
     userId: string,
     workspaceId: string,

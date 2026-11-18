@@ -197,7 +197,8 @@ export class SqlitePlanningRepository implements PlanningRepository {
 
   async listSchedulesByDateRange(
     userId: string,
-    range: PlanningDateRange
+    range: PlanningDateRange,
+    workspaceId?: string
   ): Promise<ScheduleEntry[]> {
     const startRange = range.startDate.includes("T") ? range.startDate : `${range.startDate}T00:00:00.000Z`;
     const endRange = range.endDate.includes("T") ? range.endDate : `${range.endDate}T23:59:59.999Z`;
@@ -209,11 +210,12 @@ export class SqlitePlanningRepository implements PlanningRepository {
        JOIN goals g ON a.goal_id = g.id
        JOIN workspaces w ON g.workspace_id = w.id
        WHERE w.user_id = ?
+         AND (? IS NULL OR w.id = ?)
          AND julianday(s.start_at) <= julianday(?)
          AND julianday(s.end_at) > julianday(?)
        ORDER BY s.start_at ASC`
     );
-    const rows = stmt.all(userId, endRange, startRange) as unknown as ScheduleRow[];
+    const rows = stmt.all(userId, workspaceId ?? null, workspaceId ?? null, endRange, startRange) as unknown as ScheduleRow[];
     return rows.map(mapSchedule);
   }
 

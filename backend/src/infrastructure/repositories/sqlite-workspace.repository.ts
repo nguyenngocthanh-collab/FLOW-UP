@@ -91,10 +91,33 @@ export class SqliteWorkspaceRepository implements WorkspaceRepository {
 
   async findWorkspaceByUserId(userId: string): Promise<Workspace | null> {
     const stmt = this.connection.db.prepare(
-      "SELECT id, user_id, name, created_at, updated_at FROM workspaces WHERE user_id = ?"
+      "SELECT id, user_id, name, created_at, updated_at FROM workspaces WHERE user_id = ? ORDER BY created_at ASC, id ASC LIMIT 1"
     );
     const row = stmt.get(userId) as WorkspaceRow | undefined;
     return row ? mapWorkspace(row) : null;
+  }
+
+  async listWorkspacesByUserId(userId: string): Promise<Workspace[]> {
+    const stmt = this.connection.db.prepare(
+      "SELECT id, user_id, name, created_at, updated_at FROM workspaces WHERE user_id = ? ORDER BY created_at ASC, id ASC"
+    );
+    return (stmt.all(userId) as unknown as WorkspaceRow[]).map(mapWorkspace);
+  }
+
+  async createWorkspace(userId: string, name: string): Promise<Workspace> {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    this.connection.db.prepare(
+      "INSERT INTO workspaces (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+    ).run(id, userId, name.trim(), now, now);
+    return { id, userId, name: name.trim(), createdAt: now, updatedAt: now };
+  }
+
+  async deleteWorkspace(workspaceId: string, userId: string): Promise<boolean> {
+    const result = this.connection.db.prepare(
+      "DELETE FROM workspaces WHERE id = ? AND user_id = ?"
+    ).run(workspaceId, userId);
+    return Number(result.changes) > 0;
   }
 
   async findWorkspaceById(workspaceId: string): Promise<Workspace | null> {

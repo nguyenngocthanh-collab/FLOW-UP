@@ -6,6 +6,7 @@ export interface AuthenticatedUserContext {
   userId: string;
   email: string | null;
   isAuthenticated: true;
+  workspaceId?: string;
 }
 
 export interface DailyPlan {

@@ -8,13 +8,16 @@ import type {
 /**
  * D01 persistence boundary.
  *
- * getOrCreatePersonalWorkspace MUST be atomic and backed by a unique constraint
- * on Workspace.user_id. It must return the existing row on concurrent retries.
+ * getOrCreatePersonalWorkspace MUST be atomic and return a deterministic existing
+ * personal workspace or create one when the owner has no workspace yet.
  */
 export interface WorkspaceRepository {
   getOrCreatePersonalWorkspace(userId: string): Promise<Workspace>;
   findWorkspaceByUserId(userId: string): Promise<Workspace | null>;
   findWorkspaceById(workspaceId: string): Promise<Workspace | null>;
+  listWorkspacesByUserId(userId: string): Promise<Workspace[]>;
+  createWorkspace(userId: string, name: string): Promise<Workspace>;
+  deleteWorkspace(workspaceId: string, userId: string): Promise<boolean>;
 
   createProject(
     workspaceId: string,

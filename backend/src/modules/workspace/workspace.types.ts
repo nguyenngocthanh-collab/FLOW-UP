@@ -54,6 +54,7 @@ export type WorkspaceErrorCode =
   | "WORKSPACE_ACCESS_DENIED"
   | "WORKSPACE_INITIALIZATION_FAILED"
   | "WORKSPACE_INVALID_OWNER"
+  | "WORKSPACE_INVALID_NAME"
   | "PROJECT_NOT_FOUND"
   | "PROJECT_ACCESS_DENIED"
   | "PROJECT_INVALID_NAME"
@@ -74,6 +75,9 @@ export type WorkspaceResult<T> =
   | { success: false; error: WorkspaceError };
 
 export interface WorkspaceService {
+  listWorkspaces(user: AuthenticatedUserContext): Promise<WorkspaceResult<Workspace[]>>;
+  createWorkspace(user: AuthenticatedUserContext, name: string): Promise<WorkspaceResult<Workspace>>;
+  deleteWorkspace(user: AuthenticatedUserContext, workspaceId: string): Promise<WorkspaceResult<boolean>>;
   initializePersonalWorkspace(
     user: AuthenticatedUserContext
   ): Promise<WorkspaceResult<Workspace>>;

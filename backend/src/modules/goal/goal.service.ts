@@ -98,7 +98,7 @@ export function createGoalService(
   async function resolveWorkspace(user: AuthenticatedUserContext) {
     if (!isTrustedUser(user)) return failure<string>("GOAL_UNAUTHENTICATED");
     try {
-      const workspaceId = await workspaceAccess.getCurrentWorkspaceId(user.userId);
+      const workspaceId = await workspaceAccess.getCurrentWorkspaceId(user.userId, user.workspaceId);
       return workspaceId
         ? success(workspaceId)
         : failure<string>("GOAL_ACCESS_DENIED");

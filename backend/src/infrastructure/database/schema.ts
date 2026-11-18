@@ -4,21 +4,23 @@
  *
  * Enforces:
  * - Foreign keys enabled
- * - Unique personal workspace per user
+ * - Multiple owner-scoped workspaces per user
  * - Project workspace foreign keys
  * - Goal hierarchy relational integrity
  * - Milestone/Action/Schedule constraints
  */
 
 export const SCHEMA_SQL = `
--- Workspaces table (Personal Workspace)
+-- Workspaces are user-owned containers; a user may have multiple.
 CREATE TABLE IF NOT EXISTS workspaces (
   id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL,
   name TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_workspaces_user_id ON workspaces(user_id, created_at);
 
 -- Projects table
 CREATE TABLE IF NOT EXISTS projects (

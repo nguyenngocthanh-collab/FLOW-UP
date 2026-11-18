@@ -1,0 +1,21 @@
+.workspace-manager { display: grid; gap: 1.5rem; }
+.workspace-manager__create, .workspace-manager__item, .workspace-manager__empty { border: 1px solid var(--line, #e7e6e1); border-radius: 18px; background: var(--surface, #fff); }
+.workspace-manager__create { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(320px, 1.2fr); align-items: end; gap: 1.5rem; padding: 1.5rem; }
+.workspace-manager__create h2, .workspace-manager__heading h2 { margin: 0; font-size: 1.1rem; }
+.workspace-manager__create p { margin: .45rem 0 0; color: var(--muted, #777); font-size: .9rem; }
+.workspace-manager__form { display: flex; align-items: end; gap: .75rem; }
+.workspace-manager__form .field { flex: 1; }
+.workspace-manager__heading { display: flex; justify-content: space-between; align-items: baseline; }
+.workspace-manager__heading span { color: var(--muted, #777); font-size: .88rem; }
+.workspace-manager__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: .9rem; }
+.workspace-manager__item { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: .8rem; padding: 1.1rem; }
+.workspace-manager__mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: #eff3e8; color: #526243; font-size: 1.3rem; }
+.workspace-manager__details { min-width: 0; }
+.workspace-manager__details h3 { margin: 0; overflow-wrap: anywhere; font-size: 1rem; }
+.workspace-manager__details p { margin: .35rem 0 0; color: var(--muted, #777); font-size: .8rem; }
+.workspace-manager__actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: .6rem; padding-top: .35rem; }
+.workspace-manager__empty { padding: 3rem 1.5rem; text-align: center; }
+.workspace-manager__empty > span { font-size: 2rem; color: #71815e; }
+.workspace-manager__empty h3 { margin: .7rem 0 .35rem; }
+.workspace-manager__empty p { max-width: 28rem; margin: 0 auto; color: var(--muted, #777); }
+@media (max-width: 700px) { .workspace-manager__create { grid-template-columns: 1fr; } .workspace-manager__form { align-items: stretch; flex-direction: column; } .workspace-manager__actions { justify-content: stretch; } .workspace-manager__actions > * { flex: 1; } }

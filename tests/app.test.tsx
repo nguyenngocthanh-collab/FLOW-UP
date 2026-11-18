@@ -9,7 +9,54 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function openWorkspaceFromManager() {
+  await screen.findByRole('heading', { name: 'Your workspaces' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Open workspace' }));
+  await screen.findByRole('heading', { name: 'Your space to grow' });
+}
+
 describe('FLOW-UP application', () => {
+  it('manages multiple workspaces, opens one in its own scope, and deletes another', async () => {
+    sessionStorage.setItem('flow-up.access-token', 'session-token');
+    let workspaces = [
+      { id: 'ws-old', userId: 'user-1', name: 'Old space', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+    ];
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      let data: unknown = [];
+      if (url.endsWith('/api/auth/session')) data = { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } };
+      else if (url.endsWith('/api/workspaces') && method === 'GET') data = workspaces;
+      else if (url.endsWith('/api/workspaces') && method === 'POST') {
+        const body = JSON.parse(String(init?.body));
+        const created = { id: 'ws-new', userId: 'user-1', name: body.name, createdAt: '2026-02-01', updatedAt: '2026-02-01' };
+        workspaces = [...workspaces, created];
+        data = created;
+      } else if (url.endsWith('/api/workspaces/ws-old') && method === 'DELETE') {
+        workspaces = workspaces.filter((item) => item.id !== 'ws-old');
+        data = { deleted: true };
+      } else if (url.endsWith('/api/workspaces/overview')) {
+        data = { workspace: { ...workspaces.find((item) => item.id === (init?.headers as Record<string, string>)?.['X-Workspace-Id'])! }, projects: [], goalSummary: null };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true, data }) };
+    }));
+
+    render(<App />);
+    await screen.findByText('Old space');
+    fireEvent.change(screen.getByLabelText('Workspace name'), { target: { value: 'Research' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
+    await screen.findByText('Research');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open workspace' })[1]);
+    await screen.findByRole('heading', { name: 'Your space to grow' });
+    expect(fetch).toHaveBeenCalledWith('/api/workspaces/overview', expect.objectContaining({ headers: expect.objectContaining({ 'X-Workspace-Id': 'ws-new' }) }));
+
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Workspaces/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/workspaces/ws-old', expect.objectContaining({ method: 'DELETE' })));
+    expect(screen.queryByText('Old space')).not.toBeInTheDocument();
+  });
+
   it('renders the sign-in screen for a new session', () => {
     render(<App />);
     expect(
@@ -46,7 +93,9 @@ describe('FLOW-UP application', () => {
                 isAuthenticated: true,
               },
             }
-          : url.endsWith('/api/workspaces/overview')
+          : url.endsWith('/api/workspaces')
+            ? [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }]
+            : url.endsWith('/api/workspaces/overview')
             ? {
                 workspace: {
                   id: 'ws-1',
@@ -69,9 +118,7 @@ describe('FLOW-UP application', () => {
       }),
     );
     render(<App />);
-    expect(
-      await screen.findByRole('heading', { name: 'Your space to grow' }),
-    ).toBeInTheDocument();
+    await openWorkspaceFromManager();
     expect(screen.getByText('Personal Workspace')).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith(
       '/api/auth/session',
@@ -94,7 +141,8 @@ describe('FLOW-UP application', () => {
       const url = String(input);
       const data = url.endsWith('/api/auth/session')
         ? { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } }
-        : url.endsWith('/api/workspaces/overview')
+        : url.endsWith('/api/workspaces') ? [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }]
+          : url.endsWith('/api/workspaces/overview')
           ? { workspace: { id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }, projects: [], goalSummary: null }
           : url.endsWith('/api/goals/hierarchy') ? [{ goal, children: [] }]
             : url.endsWith('/api/goals') ? [goal]
@@ -107,7 +155,7 @@ describe('FLOW-UP application', () => {
     }));
 
     render(<App />);
-    await screen.findByRole('heading', { name: 'Your space to grow' });
+    await openWorkspaceFromManager();
     const label = (await screen.findAllByText('COMPLETED ACTIONS'))[0];
     expect(label.parentElement).toHaveTextContent('1');
     expect(fetch).toHaveBeenCalledWith(
@@ -129,6 +177,7 @@ describe('FLOW-UP application', () => {
       const method = init?.method ?? 'GET';
       let data: unknown = [];
       if (url.endsWith('/api/auth/session')) data = { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } };
+      else if (url.endsWith('/api/workspaces')) data = [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }];
       else if (url.endsWith('/api/workspaces/overview')) data = { workspace: { id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }, projects: [], goalSummary: null };
       else if (url.endsWith('/api/goals/hierarchy')) data = [{ goal, children: [] }];
       else if (url.endsWith('/api/goals')) data = [goal];
@@ -149,7 +198,7 @@ describe('FLOW-UP application', () => {
     }));
 
     render(<App />);
-    await screen.findByRole('heading', { name: 'Your space to grow' });
+    await openWorkspaceFromManager();
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Goals/ }));
     fireEvent.click(await screen.findByRole('button', { name: /Build a running habit/ }));
     fireEvent.click(await screen.findByRole('button', { name: '+ Add' }));
@@ -174,7 +223,8 @@ describe('FLOW-UP application', () => {
       const url = String(input);
       const data = url.endsWith('/api/auth/session')
         ? { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } }
-        : url.endsWith('/api/workspaces/overview')
+        : url.endsWith('/api/workspaces') ? [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }]
+          : url.endsWith('/api/workspaces/overview')
           ? { workspace: { id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }, projects: [], goalSummary: null }
           : url.endsWith('/api/goals/hierarchy') ? [{ goal, children: [] }]
             : url.endsWith('/api/goals') ? [goal]
@@ -188,7 +238,7 @@ describe('FLOW-UP application', () => {
     }));
 
     render(<App />);
-    await screen.findByRole('heading', { name: 'Your space to grow' });
+    await openWorkspaceFromManager();
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Main navigation' })).getByRole('button', { name: /Review/ }));
     expect(await screen.findByRole('heading', { name: 'Run a 5K' })).toBeInTheDocument();
     expect(screen.getByText('Not configured')).toBeInTheDocument();
@@ -254,7 +304,8 @@ describe('FLOW-UP application', () => {
       const url = String(input);
       const data = url.endsWith('/api/auth/session')
         ? { user: { userId: 'user-1', email: 'person@example.com', isAuthenticated: true } }
-        : url.endsWith('/api/workspaces/overview')
+        : url.endsWith('/api/workspaces') ? [{ id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }]
+          : url.endsWith('/api/workspaces/overview')
           ? { workspace: { id: 'ws-1', userId: 'user-1', name: 'Personal Workspace', createdAt: '', updatedAt: '' }, projects: [], goalSummary: null }
           : url.endsWith('/api/goals/hierarchy') ? []
             : url.endsWith('/api/ai/goal-understanding')

@@ -144,8 +144,11 @@ export function createApplicationContainer(
 
   // 4. B03 Goal Service
   const goalWorkspaceAccess: GoalWorkspaceAccess = {
-    async getCurrentWorkspaceId(userId: string): Promise<string | null> {
-      const ws = await workspaceRepo.findWorkspaceByUserId(userId);
+    async getCurrentWorkspaceId(userId: string, selectedWorkspaceId?: string): Promise<string | null> {
+      const ws = selectedWorkspaceId
+        ? await workspaceRepo.findWorkspaceById(selectedWorkspaceId)
+        : await workspaceRepo.findWorkspaceByUserId(userId);
+      if (ws && ws.userId !== userId) return null;
       return ws?.id ?? null;
     },
 
@@ -382,7 +385,8 @@ export function createApplicationContainer(
 
     async getChildGoalIds(user, goalId) {
       const wsId = await goalWorkspaceAccess.getCurrentWorkspaceId(
-        user.userId
+        user.userId,
+        user.workspaceId
       );
 
       if (!wsId) return [];
