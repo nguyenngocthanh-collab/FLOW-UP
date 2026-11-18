@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
+import { PlanningCalendar } from '../src/planning/PlanningCalendar';
 
 afterEach(() => {
   cleanup();
@@ -194,6 +195,51 @@ describe('FLOW-UP application', () => {
     expect(screen.getByText('1 / 2')).toBeInTheDocument();
     expect(await screen.findByText('Ran in the park')).toBeInTheDocument();
     expect(await screen.findByText('2.5 km')).toBeInTheDocument();
+  });
+
+  it('loads scheduled work, moves a session, and schedules an open Action from the calendar', async () => {
+    const goals = [{ id: 'goal-calendar', title: 'Build a running habit' }] as never[];
+    const actions = [
+      { id: 'action-scheduled', goalId: 'goal-calendar', milestoneId: null, title: 'Morning run', description: null, status: 'IN_PROGRESS', archivedAt: null },
+      { id: 'action-open', goalId: 'goal-calendar', milestoneId: null, title: 'Prepare running shoes', description: null, status: 'TODO', archivedAt: null },
+    ] as never[];
+    let records = [{ id: 'schedule-1', actionId: 'action-scheduled', dailyPlanId: 'plan-1', startAt: '2026-11-18T09:00:00.000Z', endAt: '2026-11-18T10:00:00.000Z' }];
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      let data: unknown = records;
+      if (url.startsWith('/api/planning/schedules?')) data = records;
+      else if (url === '/api/planning/schedules/schedule-1' && method === 'PATCH') {
+        const body = JSON.parse(String(init?.body));
+        records = records.map((item) => item.id === 'schedule-1' ? { ...item, ...body } : item);
+        data = records[0];
+      } else if (url === '/api/planning/schedules' && method === 'POST') {
+        const body = JSON.parse(String(init?.body));
+        const created = { id: 'schedule-2', ...body };
+        records = [...records, created]; data = created;
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true, data }) };
+    }));
+    render(<PlanningCalendar actions={actions} goals={goals} actionsLoaded actionsLoadError={false} initialDate="2026-11-18" onRefreshActions={vi.fn()} onOpenGoal={vi.fn()} onLogExecution={vi.fn()} />);
+
+    await waitFor(() => expect(screen.queryByText('Loading schedules…')).not.toBeInTheDocument());
+    expect(await screen.findByText('Morning run')).toBeInTheDocument();
+    expect(screen.getByText('Prepare running shoes')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Month' }));
+    expect(await screen.findByRole('heading', { name: 'November 2026' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Wednesday, November 18' }));
+    expect(await screen.findByRole('heading', { name: 'Wednesday, November 18, 2026' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Day' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit time' }));
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-11-19' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save time' }));
+    await screen.findByText('Thursday, November 19, 2026');
+    expect(fetch).toHaveBeenCalledWith('/api/planning/schedules/schedule-1', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('"dailyPlanId":null') }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to calendar' }));
+    await screen.findByText('2 scheduled');
+    expect(fetch).toHaveBeenCalledWith('/api/planning/schedules', expect.objectContaining({ method: 'POST', body: expect.stringContaining('"actionId":"action-open"') }));
   });
 
   it('runs the structured goal discovery path and displays proposal items separately', async () => {

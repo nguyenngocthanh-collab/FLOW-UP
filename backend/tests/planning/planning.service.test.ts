@@ -27,6 +27,7 @@ function setup() {
     updateSchedule: vi.fn(async (_id: string, patch: Partial<ScheduleEntry>) => ({ ...schedule, ...patch })),
     deleteSchedule: vi.fn(async () => undefined),
     listSchedulesByDateRange: vi.fn(async () => [schedule]),
+    findOverlappingSchedules: vi.fn(async () => []),
   };
   const actionAccess = { assertCanAccessAction: vi.fn(async () => undefined) };
   const access = {

@@ -305,7 +305,7 @@ export function createApplicationContainer(
   };
 
   const planningRules: PlanningRules = {
-    async assertScheduleAllowed({ startAt, endAt }) {
+    async assertScheduleAllowed({ userId, startAt, endAt, excludeScheduleId }) {
       const start = Date.parse(startAt);
       const end = Date.parse(endAt);
 
@@ -318,6 +318,10 @@ export function createApplicationContainer(
           "SCHEDULE_INVALID_TIME_RANGE",
           "Schedule end time must be after start time."
         );
+      }
+      const overlaps = await planningRepo.findOverlappingSchedules(userId, startAt, endAt, excludeScheduleId);
+      if (overlaps.length) {
+        throw new PlanningError("SCHEDULE_CONFLICT", "This time overlaps another scheduled Action. Choose a different time.");
       }
     },
 

@@ -36,6 +36,7 @@ import {
 } from '../lib/api';
 import '../assistant.css';
 import '../measurement.css';
+import { PlanningCalendar } from '../planning/PlanningCalendar';
 
 type Page = 'home' | 'projects' | 'goals' | 'planning' | 'review' | 'assistant';
 type Notice = { kind: 'success' | 'error'; text: string } | null;
@@ -718,18 +719,6 @@ export function App() {
   const [executionAction, setExecutionAction] = useState<Action | null>(null);
   const [executionData, setExecutionData] = useState<Execution | null>(null);
   const [planningDate, setPlanningDate] = useState(today());
-  const [plan, setPlan] = useState<{
-    dailyPlan: { id: string; date: string };
-    schedules: {
-      id: string;
-      actionId: string;
-      startAt: string;
-      endAt: string;
-    }[];
-  } | null>(null);
-  const [scheduleActionId, setScheduleActionId] = useState('');
-  const [scheduleStart, setScheduleStart] = useState('09:00');
-  const [scheduleEnd, setScheduleEnd] = useState('10:00');
 
   const notify = useCallback((next: Notice) => {
     setNotice(next);
@@ -834,7 +823,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [user, selectedGoal, handleError]);
+  }, [user, selectedGoal, actionRefresh, handleError]);
 
   useEffect(() => {
     if (!user || !selectedGoal) {
@@ -863,28 +852,6 @@ export function App() {
     })();
     return () => { active = false; };
   }, [user, selectedGoal, measurementRefresh, handleError]);
-
-  useEffect(() => {
-    if (page !== 'planning' || !user) return;
-    let active = true;
-    (async () => {
-      try {
-        try {
-          const result = await api.dailyPlan(planningDate);
-          if (active) setPlan(result);
-        } catch (error) {
-          if (error instanceof ApiError && error.status === 404) {
-            if (active) setPlan(null);
-          } else throw error;
-        }
-      } catch (error) {
-        if (active) handleError(error);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [page, planningDate, user, handleError]);
 
   useEffect(() => {
     if (page !== 'home' || !user) return;
@@ -1257,55 +1224,6 @@ export function App() {
     }
   }
 
-  async function createPlan() {
-    try {
-      const dailyPlan = await api.createDailyPlan(planningDate);
-      setPlan({ dailyPlan, schedules: [] });
-      notify({ kind: 'success', text: 'Daily plan created.' });
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function addSchedule(event: FormEvent) {
-    event.preventDefault();
-    if (!scheduleActionId) return;
-    try {
-      const action = availableActions.find(
-        (item) => item.id === scheduleActionId,
-      );
-      if (!action) throw new Error('Choose a valid action.');
-      const startAt = new Date(
-        `${planningDate}T${scheduleStart}:00`,
-      ).toISOString();
-      const endAt = new Date(`${planningDate}T${scheduleEnd}:00`).toISOString();
-      const created = await api.createSchedule({
-        actionId: action.id,
-        startAt,
-        endAt,
-        dailyPlanId: plan?.dailyPlan.id ?? null,
-      });
-      if (plan) setPlan({ ...plan, schedules: [...plan.schedules, created] });
-      notify({ kind: 'success', text: 'Action scheduled.' });
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
-  async function removeSchedule(id: string) {
-    try {
-      await api.deleteSchedule(id);
-      if (plan)
-        setPlan({
-          ...plan,
-          schedules: plan.schedules.filter((schedule) => schedule.id !== id),
-        });
-      notify({ kind: 'success', text: 'Schedule removed.' });
-    } catch (error) {
-      handleError(error);
-    }
-  }
-
   if (booting)
     return (
       <div className="boot-screen">
@@ -1423,15 +1341,6 @@ export function App() {
                   <span>＋</span> New goal
                 </Button>
               </div>
-            )}
-            {page === 'planning' && (
-              <Button
-                variant="secondary"
-                onClick={createPlan}
-                disabled={!!plan}
-              >
-                ＋ Create daily plan
-              </Button>
             )}
             {page === 'assistant' && (
               <Button variant="secondary" onClick={() => setPage('goals')}>
@@ -1975,148 +1884,23 @@ export function App() {
           )}
 
           {page === 'planning' && (
-            <div className="planning-layout">
-              <section className="panel planning-panel">
-                <div className="panel__heading">
-                  <div>
-                    <h2>Your day, with intention</h2>
-                    <p>Schedule actions into focused blocks of time.</p>
-                  </div>
-                  <Field
-                    label="Choose date"
-                    type="date"
-                    value={planningDate}
-                    onChange={(event) => setPlanningDate(event.target.value)}
-                  />
-                </div>
-                {!plan ? (
-                  <EmptyState
-                    icon="▤"
-                    title="A little structure goes a long way"
-                    body="Create a daily plan for this date, then add actions you want to focus on."
-                    action={
-                      <Button onClick={createPlan}>Create daily plan</Button>
-                    }
-                  />
-                ) : (
-                  <>
-                    <div className="plan-date-strip">
-                      <span className="plan-date-strip__day">
-                        {new Date(
-                          `${planningDate}T12:00:00`,
-                        ).toLocaleDateString(undefined, { weekday: 'long' })}
-                      </span>
-                      <strong>{dateLabel(planningDate)}</strong>
-                      <span className="count-pill">
-                        {plan.schedules.length} scheduled
-                      </span>
-                    </div>
-                    <div className="schedule-list">
-                      {plan.schedules.length ? (
-                        plan.schedules
-                          .sort((a, b) => a.startAt.localeCompare(b.startAt))
-                          .map((schedule) => (
-                            <div className="schedule-row" key={schedule.id}>
-                              <span className="schedule-row__time">
-                                {new Date(schedule.startAt).toLocaleTimeString(
-                                  [],
-                                  { hour: '2-digit', minute: '2-digit' },
-                                )}
-                                <small>
-                                  {new Date(schedule.endAt).toLocaleTimeString(
-                                    [],
-                                    { hour: '2-digit', minute: '2-digit' },
-                                  )}
-                                </small>
-                              </span>
-                              <span className="schedule-row__line" />
-                              <span className="schedule-row__body">
-                                <strong>
-                                  {availableActions.find(
-                                    (action) => action.id === schedule.actionId,
-                                  )?.title ?? 'Scheduled action'}
-                                </strong>
-                                <small>Focused work</small>
-                              </span>
-                              <button
-                                className="icon-button"
-                                aria-label="Remove schedule"
-                                onClick={() => removeSchedule(schedule.id)}
-                              >
-                                ×
-                              </button>
-                            </div>
-                          ))
-                      ) : (
-                        <div className="empty-line empty-line--center">
-                          Your day is open. Add an action below.
-                        </div>
-                      )}
-                    </div>
-                    <form className="schedule-form" onSubmit={addSchedule}>
-                      <label className="field">
-                        <span>Action</span>
-                        <select
-                          value={scheduleActionId}
-                          onChange={(event) =>
-                            setScheduleActionId(event.target.value)
-                          }
-                          required
-                        >
-                          <option value="">Choose an action</option>
-                          {availableActions
-                            .filter((action) => action.status !== 'COMPLETED')
-                            .map((action) => (
-                              <option value={action.id} key={action.id}>
-                                {action.title} ·{' '}
-                                {goals.find((goal) => goal.id === action.goalId)
-                                  ?.title ?? 'Goal'}
-                              </option>
-                            ))}
-                        </select>
-                      </label>
-                      <Field
-                        label="Start"
-                        type="time"
-                        value={scheduleStart}
-                        onChange={(event) =>
-                          setScheduleStart(event.target.value)
-                        }
-                        required
-                      />
-                      <Field
-                        label="End"
-                        type="time"
-                        value={scheduleEnd}
-                        onChange={(event) => setScheduleEnd(event.target.value)}
-                        required
-                      />
-                      <Button
-                        disabled={
-                          !availableActions.some(
-                            (action) => action.status !== 'COMPLETED',
-                          )
-                        }
-                      >
-                        Schedule action
-                      </Button>
-                    </form>
-                  </>
-                )}
-              </section>
-              <aside className="panel planning-aside">
-                <span className="planning-aside__icon">✦</span>
-                <h2>Make it manageable</h2>
-                <p>
-                  A realistic plan leaves room to think, pause, and adjust.
-                  Start with one action that would make today feel meaningful.
-                </p>
-                <div className="planning-aside__note">
-                  <strong>Planning tip</strong>
-                  <span>Keep each focus block small enough to begin.</span>
-                </div>
-              </aside>
-            </div>
+            <PlanningCalendar
+              actions={availableActions}
+              goals={goals}
+              actionsLoaded={actionsLoaded}
+              actionsLoadError={actionsLoadError}
+              initialDate={planningDate}
+              onRefreshActions={() => setActionRefresh((value) => value + 1)}
+              onOpenGoal={(goalId) => {
+                const goal = goals.find((item) => item.id === goalId);
+                if (goal) {
+                  setSelectedGoal(goal);
+                  setSelectedProject(projects.find((project) => project.id === goal.projectId) ?? null);
+                }
+                setPage('goals');
+              }}
+              onLogExecution={(action) => void openExecution(action)}
+            />
           )}
 
           {notice && (

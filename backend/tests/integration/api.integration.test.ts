@@ -554,6 +554,25 @@ describe("FLOW-UP Backend API Integration Tests", () => {
     const schedData = await schedRes.json<{ success: boolean; data: { id: string; actionId: string } }>();
     expect(schedData.data.actionId).toBe(actionId);
 
+    const overlappingRes = await request("POST", "/api/planning/schedules", {
+      headers: { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ actionId, startAt: "2026-11-18T09:30:00.000Z", endAt: "2026-11-18T10:30:00.000Z" })
+    });
+    expect(overlappingRes.status).toBe(409);
+    expect((await overlappingRes.json<{ error: { code: string } }>()).error.code).toBe("SCHEDULE_CONFLICT");
+
+    const movedRes = await request("PATCH", `/api/planning/schedules/${schedData.data.id}`, {
+      headers: { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ startAt: "2026-11-18T10:00:00.000Z", endAt: "2026-11-18T11:00:00.000Z" })
+    });
+    expect(movedRes.status).toBe(200);
+
+    const adjacentRes = await request("POST", "/api/planning/schedules", {
+      headers: { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ actionId, startAt: "2026-11-18T11:00:00.000Z", endAt: "2026-11-18T12:00:00.000Z" })
+    });
+    expect(adjacentRes.status).toBe(201);
+
     // 8. Progress endpoint: verify unconfigured rules return RULE_NOT_CONFIGURED & null progress
     const progRes = await request("GET", `/api/progress/goals/${createdGoalId}`, {
       headers: { Authorization: `Bearer ${userA.token}` }

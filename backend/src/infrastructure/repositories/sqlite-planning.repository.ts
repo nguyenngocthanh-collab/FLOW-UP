@@ -209,11 +209,33 @@ export class SqlitePlanningRepository implements PlanningRepository {
        JOIN goals g ON a.goal_id = g.id
        JOIN workspaces w ON g.workspace_id = w.id
        WHERE w.user_id = ?
-         AND s.start_at >= ?
-         AND s.start_at <= ?
+         AND julianday(s.start_at) <= julianday(?)
+         AND julianday(s.end_at) > julianday(?)
        ORDER BY s.start_at ASC`
     );
-    const rows = stmt.all(userId, startRange, endRange) as unknown as ScheduleRow[];
+    const rows = stmt.all(userId, endRange, startRange) as unknown as ScheduleRow[];
+    return rows.map(mapSchedule);
+  }
+
+  async findOverlappingSchedules(
+    userId: string,
+    startAt: string,
+    endAt: string,
+    excludeScheduleId?: ScheduleId,
+  ): Promise<ScheduleEntry[]> {
+    const stmt = this.connection.db.prepare(
+      `SELECT DISTINCT s.id, s.action_id, s.daily_plan_id, s.start_at, s.end_at, s.created_at, s.updated_at
+       FROM schedules s
+       JOIN actions a ON s.action_id = a.id
+       JOIN goals g ON a.goal_id = g.id
+       JOIN workspaces w ON g.workspace_id = w.id
+       WHERE w.user_id = ?
+         AND julianday(s.start_at) < julianday(?)
+         AND julianday(s.end_at) > julianday(?)
+         AND (? IS NULL OR s.id <> ?)
+       ORDER BY s.start_at ASC`
+    );
+    const rows = stmt.all(userId, endAt, startAt, excludeScheduleId ?? null, excludeScheduleId ?? null) as unknown as ScheduleRow[];
     return rows.map(mapSchedule);
   }
 }

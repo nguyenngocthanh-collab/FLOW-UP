@@ -353,6 +353,8 @@ export const api = {
     endAt: string;
     dailyPlanId?: string | null;
   }) => post<Schedule>('/api/planning/schedules', body),
+  updateSchedule: (id: string, body: { startAt?: string; endAt?: string; dailyPlanId?: string | null }) =>
+    patch<Schedule>(`/api/planning/schedules/${encodeURIComponent(id)}`, body),
   deleteSchedule: (id: string) =>
     del<{ deleted: boolean }>(
       `/api/planning/schedules/${encodeURIComponent(id)}`,

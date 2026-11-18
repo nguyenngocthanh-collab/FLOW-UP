@@ -15,6 +15,7 @@ export interface PlanningRepository {
     "startAt" | "endAt" | "dailyPlanId" | "updatedAt">>): Promise<ScheduleEntry>;
   deleteSchedule(id: ScheduleId): Promise<void>;
   listSchedulesByDateRange(userId: string, range: PlanningDateRange): Promise<ScheduleEntry[]>;
+  findOverlappingSchedules(userId: string, startAt: string, endAt: string, excludeScheduleId?: ScheduleId): Promise<ScheduleEntry[]>;
 }
 
 export interface ActionAccess {
@@ -29,7 +30,7 @@ export interface PlanningAccess {
 export interface PlanningRules {
   /** C07 / DEC-017 supplies approved conflict and relationship behavior. */
   assertScheduleAllowed(input: {
-    actionId: ActionId; dailyPlan: DailyPlan | null; startAt: string; endAt: string;
+    userId: string; actionId: ActionId; dailyPlan: DailyPlan | null; startAt: string; endAt: string;
     excludeScheduleId?: ScheduleId;
   }): Promise<void>;
   /** C07 supplies the approved date/time-zone and date-boundary interpretation. */

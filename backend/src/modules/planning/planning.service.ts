@@ -88,7 +88,7 @@ export class PlanningService {
     const plan = input.dailyPlanId ? await this.getOwnedPlan(user, input.dailyPlanId) : null;
     if (plan) this.rules.assertScheduleMatchesPlanDate({ startAt: input.startAt, endAt: input.endAt, dailyPlan: plan });
     await this.rules.assertScheduleAllowed({
-      actionId: input.actionId, dailyPlan: plan, startAt: input.startAt, endAt: input.endAt,
+      userId: user.userId, actionId: input.actionId, dailyPlan: plan, startAt: input.startAt, endAt: input.endAt,
     });
     const timestamp = this.now().toISOString();
     return this.repository.createSchedule({
@@ -114,7 +114,7 @@ export class PlanningService {
     if (plan) this.rules.assertScheduleMatchesPlanDate({ startAt, endAt, dailyPlan: plan });
     await this.actionAccess.assertCanAccessAction(user, schedule.actionId);
     await this.rules.assertScheduleAllowed({
-      actionId: schedule.actionId, dailyPlan: plan, startAt, endAt, excludeScheduleId: schedule.id,
+      userId: user.userId, actionId: schedule.actionId, dailyPlan: plan, startAt, endAt, excludeScheduleId: schedule.id,
     });
     return this.repository.updateSchedule(id, { ...patch, updatedAt: this.now().toISOString() });
   }

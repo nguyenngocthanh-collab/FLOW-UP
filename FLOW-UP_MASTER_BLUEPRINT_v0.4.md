@@ -19533,3 +19533,37 @@ This implementation update records the current web MVP state. It supersedes earl
 - Frontend/backend typechecks, 6 frontend tests, 185 backend tests, focused lint, and production build passed after the implementation.
 - API integration tests cover Measurement authorization, cross-user denial, validation, persistence across restart, and AI proposal application.
 - Live Gemini verification was attempted with configured credentials but outbound network access failed with `EACCES`; browser-driven E2E remains unavailable in this repository.
+
+## Implementation update — Calendar and Planning workspace (2026-11-18)
+
+This update records verified B07 and connected UI changes. It does not introduce a second planning model or alter stored schedule data.
+
+### B07 Planning and Calendar
+
+- The Planning screen now reads the authoritative Schedule range API and provides month, week, and day views. Calendar events link to their owning Goal and show Action/Milestone context and current Action status.
+- Open Actions without a Schedule in the visible range appear beside the Calendar and can be scheduled directly. A Daily Plan is no longer required to create or view a Schedule; existing Daily Plan records and API operations remain supported.
+- Users can move or edit Schedule times, remove a Schedule without deleting its Action, update the linked Action status, and open the existing execution log workflow. Calendar mutations use B07 and B05 APIs and refresh related Action/Progress reads.
+- B07 now rejects overlapping time ranges for the same user with `SCHEDULE_CONFLICT`. Intervals use `[startAt, endAt)`, so adjacent sessions are allowed. Updates exclude their own Schedule from conflict checks. Time comparisons use SQLite `julianday` to account for ISO offset representations.
+- Schedule range reads include sessions that overlap the requested boundary instead of only those whose start falls inside it. The browser queries a small UTC boundary buffer and groups returned Sessions by local browser date.
+- No database schema change or migration was required. Calendar-created schedules use the existing `schedules` record with a nullable `daily_plan_id`.
+
+### Product concept decisions reflected in implementation
+
+- Calendar is a time-oriented view over B05 Actions and B07 Schedules; it is not a separate planning source of truth.
+- Action status and execution logs remain separate B05 facts. Recording execution does not silently mark an Action complete.
+- Home remains a curated continuation surface rather than a configurable Widget Suite. Goal Measurements remain typed B06 records rather than a generic Data Table. Stage/Chunk, Docs ownership, arbitrary Mathematics/formulas, and user-configurable Widgets remain deferred pending concrete domain decisions.
+
+### Verification
+
+- Frontend tests: 8 passed, including scheduling an unscheduled Action and moving an existing Schedule through the UI API client.
+- Backend tests: 185 passed. API integration verifies Schedule creation, overlapping-range rejection (409), and update through the authenticated B07 endpoints.
+- Frontend and backend typechecks: PASS. Focused ESLint on changed TypeScript/TSX and backend files: PASS.
+- Production build: PASS (`npm run build`).
+- Temporary-database runtime journey: registration, Workspace, Goal, Milestone, Action, direct Schedule creation, conflict response, Schedule update, execution record, Measurement record, and Progress read all completed. Backend health and Vite SPA each returned HTTP 200.
+- Browser automation is not configured or installed in this repository; UI operations were covered by component interaction tests and real API operations were exercised separately against an isolated temporary database.
+
+### Remaining boundaries
+
+- Schedule conflict validation at the B07 service boundary checks current persisted user schedules. Concurrent schedule-write serialization is not guaranteed by the current repository contract.
+- The app has no user-configurable time-zone setting; Calendar renders in the browser's local zone while persisted instants remain ISO timestamps.
+- Daily Plan semantics, recurring Schedules, and persistent review notes remain as previously defined/open. AI Daily Planning is not implemented.
