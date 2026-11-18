@@ -21,3 +21,9 @@
 - No AI may mark work as complete without test evidence.
 - MVP runtime must not require a paid AI API.
 "# FLOW-UP" 
+
+## FLOW-UP application quick start
+
+The current product architecture and decisions are documented in [`FLOW-UP_MASTER_BLUEPRINT_v0.4.md`](FLOW-UP_MASTER_BLUEPRINT_v0.4.md). The current product audit and redesign proposal are in [`docs/FLOW_UP_PRODUCT_RETHINK.md`](docs/FLOW_UP_PRODUCT_RETHINK.md); [`docs/FLOW_UP_PRODUCT_EVOLUTION_AUDIT.md`](docs/FLOW_UP_PRODUCT_EVOLUTION_AUDIT.md) retains earlier implementation context.
+
+For local setup, environment variables, startup commands, AI privacy notes and known MVP limits, see [`docs/LOCAL_DEMO.md`](docs/LOCAL_DEMO.md).

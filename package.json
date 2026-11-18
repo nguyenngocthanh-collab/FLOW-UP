@@ -25,6 +25,7 @@
     "test:all": "vitest run && vitest run --config backend/vitest.config.ts"
   },
   "dependencies": {
+    "@google/genai": "^3.5.0",
     "@supabase/supabase-js": "^2.119.0",
     "react": "18.3.1",
     "react-dom": "18.3.1"

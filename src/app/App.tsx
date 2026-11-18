@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ButtonHTMLAttributes,
   type FormEvent,
@@ -17,17 +18,26 @@ import {
   saveToken,
   type Action,
   type ActionStatus,
+  type AIClarification,
+  type AIFeasibility,
+  type AIProposal,
+  type AIProposalItem,
   type Execution,
   type Goal,
   type GoalNode,
   type Milestone,
+  type Measurement,
+  type MeasurementRecord,
   type Project,
   type ProgressSummary,
+  type Schedule,
   type UserContext,
   type Workspace,
 } from '../lib/api';
+import '../assistant.css';
+import '../measurement.css';
 
-type Page = 'home' | 'projects' | 'goals' | 'planning';
+type Page = 'home' | 'projects' | 'goals' | 'planning' | 'assistant';
 type Notice = { kind: 'success' | 'error'; text: string } | null;
 function messageOf(error: unknown): string {
   return error instanceof Error
@@ -284,6 +294,7 @@ function Sidebar({
   closeMobile: () => void;
 }) {
   const items: { id: Page; label: string; icon: string }[] = [
+    { id: 'assistant', label: 'Goal discovery', icon: 'AI' },
     { id: 'home', label: 'Overview', icon: '◫' },
     { id: 'projects', label: 'Projects', icon: '▦' },
     { id: 'goals', label: 'Goals', icon: '◎' },
@@ -360,37 +371,223 @@ function GoalTree({
   depth?: number;
 }) {
   return (
-    <>
-      {nodes.map(({ goal, children }) => (
-        <div key={goal.id}>
-          <button
-            className={`tree-row ${selectedId === goal.id ? 'tree-row--active' : ''}`}
-            style={{ paddingLeft: `${14 + depth * 18}px` }}
-            onClick={() => onSelect(goal)}
-          >
-            <span className="tree-row__branch">{depth ? '↳' : '○'}</span>
-            <span>{goal.title}</span>
-            <span className="tree-row__status">
-              {goal.status.toLowerCase().replaceAll('_', ' ')}
-            </span>
-          </button>
-          {children.length > 0 && (
-            <GoalTree
-              nodes={children}
-              selectedId={selectedId}
-              onSelect={onSelect}
-              depth={depth + 1}
-            />
-          )}
+    <>{nodes.map((node) => <GoalTreeNode key={node.goal.id} node={node} selectedId={selectedId} onSelect={onSelect} depth={depth} />)}</>
+  );
+}
+
+function GoalTreeNode({ node, selectedId, onSelect, depth }: {
+  node: GoalNode; selectedId: string | null; onSelect: (goal: Goal) => void; depth: number;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const { goal, children } = node;
+  return <div className="goal-tree__node">
+    <div className="goal-tree__node-head">
+      <button className={`tree-row ${selectedId === goal.id ? 'tree-row--active' : ''}`} style={{ paddingLeft: `${14 + depth * 18}px` }} onClick={() => onSelect(goal)}>
+        <span className="tree-row__branch">{depth ? '↳' : '○'}</span><span>{goal.title}</span>
+        <span className="tree-row__status">{goal.status.toLowerCase().replaceAll('_', ' ')}</span>
+      </button>
+      {children.length > 0 && <button type="button" className="tree-toggle" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${goal.title}`} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? '−' : '+'}</button>}
+    </div>
+    {expanded && children.map((child) => <GoalTreeNode key={child.goal.id} node={child} selectedId={selectedId} onSelect={onSelect} depth={depth + 1} />)}
+  </div>;
+}
+
+function GoalAssistantPage({
+  onApplied,
+  onManual,
+}: {
+  onApplied: () => Promise<void>;
+  onManual: () => void;
+}) {
+  const [input, setInput] = useState(() => sessionStorage.getItem('flow-up.goal-discovery.input') ?? '');
+  const [understanding, setUnderstanding] = useState<AIClarification | null>(null);
+  const [feasibility, setFeasibility] = useState<AIFeasibility | null>(null);
+  const [proposal, setProposal] = useState<AIProposal | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(sessionStorage.getItem('flow-up.goal-discovery.answers') ?? '{}') as Record<string, string>; }
+    catch { return {}; }
+  });
+  const [selected, setSelected] = useState<string[]>([]);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const [result, setResult] = useState('');
+  const requestInFlight = useRef(false);
+
+  useEffect(() => {
+    if (input) sessionStorage.setItem('flow-up.goal-discovery.input', input);
+    else sessionStorage.removeItem('flow-up.goal-discovery.input');
+  }, [input]);
+  useEffect(() => {
+    sessionStorage.setItem('flow-up.goal-discovery.answers', JSON.stringify(answers));
+  }, [answers]);
+
+  function workflowInput(): string {
+    const replies = understanding?.questions
+      .filter((question) => answers[question.id]?.trim())
+      .map((question) => `${question.prompt}: ${answers[question.id]}`) ?? [];
+    return replies.length ? `${input}\n\nClarification answers:\n${replies.join('\n')}` : input;
+  }
+
+  useEffect(() => {
+    const proposalId = sessionStorage.getItem('flow-up.current-ai-proposal');
+    if (!proposalId) return;
+    let active = true;
+    api.getAIProposal(proposalId).then((saved) => {
+      if (!active || !['PENDING_REVIEW', 'EDITED', 'PARTIALLY_APPROVED', 'FAILED'].includes(saved.status)) return;
+      setProposal(saved);
+      setSelected(saved.proposalData.items.filter((item) => !saved.proposalData.applicationResults?.some((entry) => entry.operation === item.id && entry.success)).map((item) => item.id));
+    }).catch(() => sessionStorage.removeItem('flow-up.current-ai-proposal'));
+    return () => { active = false; };
+  }, []);
+
+  async function run<T>(label: string, action: () => Promise<T>, done: (value: T) => void) {
+    if (requestInFlight.current) return;
+    if (!input.trim()) { setError('Describe the outcome you want to work toward.'); return; }
+    requestInFlight.current = true;
+    setError(''); setResult(''); setBusy(label);
+    try { done(await action()); }
+    catch (reason) { setError(messageOf(reason)); }
+    finally { requestInFlight.current = false; setBusy(''); }
+  }
+
+  function updateProposalItem(itemId: string, change: Partial<AIProposalItem>) {
+    if (!proposal) return;
+    setProposal({ ...proposal, proposalData: { ...proposal.proposalData,
+      items: proposal.proposalData.items.map((item) => item.id === itemId ? { ...item, ...change } : item),
+    } });
+  }
+
+  async function apply() {
+    if (requestInFlight.current || !proposal || !selected.length) return;
+    requestInFlight.current = true;
+    setBusy('apply'); setError(''); setResult('');
+    try {
+      const response = await api.applyAIProposal(proposal.id, {
+        selectedItemIds: selected,
+        editedData: proposal.proposalData,
+      });
+      const latest = await api.getAIProposal(proposal.id);
+      setProposal(latest);
+      const succeeded = response.operations.filter((operation) => operation.success).map((operation) => operation.operation);
+      const failed = response.operations.filter((operation) => !operation.success).map((operation) => operation.operation);
+      if (response.status === 'APPLIED') {
+        sessionStorage.removeItem('flow-up.current-ai-proposal');
+        sessionStorage.removeItem('flow-up.goal-discovery.input');
+        sessionStorage.removeItem('flow-up.goal-discovery.answers');
+        setInput('');
+        setAnswers({});
+        await onApplied();
+      }
+      else {
+        setSelected(latest.proposalData.items.filter((item) => !latest.proposalData.applicationResults?.some((entry) => entry.operation === item.id && entry.success)).map((item) => item.id));
+        setResult(`${succeeded.length} item(s) were saved. ${failed.length} item(s) need attention. Successfully saved items are locked against duplicate application.`);
+      }
+    } catch (reason) { setError(messageOf(reason)); }
+    finally { requestInFlight.current = false; setBusy(''); }
+  }
+
+  async function reject() {
+    if (requestInFlight.current || !proposal) return;
+    requestInFlight.current = true;
+    setBusy('reject'); setError('');
+    try { await api.rejectAIProposal(proposal.id); setProposal(null); sessionStorage.removeItem('flow-up.current-ai-proposal'); setResult('Proposal rejected. Nothing was added to your goals.'); }
+    catch (reason) { setError(messageOf(reason)); }
+    finally { requestInFlight.current = false; setBusy(''); }
+  }
+
+  return (
+    <div className="assistant-layout">
+      <section className="panel assistant-panel">
+        <div className="panel__heading">
+          <div><span className="eyebrow">AI-GUIDED, USER-CONTROLLED</span><h2>What would you like to achieve?</h2></div>
         </div>
-      ))}
-    </>
+        <div className="muted">
+          <p>When you request AI help, your text is sent to Google Gemini. Free-tier content may be used to improve Google products.</p>
+          <details>
+            <summary>Privacy details</summary>
+            <p>Share only information you are comfortable sending to Google. Avoid sensitive personal information.</p>
+          </details>
+        </div>
+        <TextArea label="Your goal and any useful context" value={input} maxLength={4000}
+          placeholder="For example: I want to improve my health and have more energy, but I am not sure where to start."
+          onChange={(event) => setInput(event.target.value)} />
+        <div className="heading-actions">
+          <Button disabled={!!busy || !input.trim()} onClick={() => void run('understand', () => api.understandGoal(input), (value) => { setAnswers({}); setUnderstanding(value); })}>
+            {busy === 'understand' ? 'Understanding…' : 'Understand my goal'}
+          </Button>
+          <Button variant="secondary" onClick={onManual}>Create a goal manually</Button>
+        </div>
+        {error && <p className="inline-error" role="alert">{error} You can continue manually.</p>}
+        {result && <p className="inline-success" role="status">{result}</p>}
+      </section>
+
+      {understanding && (
+        <section className="panel assistant-panel">
+          <span className="eyebrow">AI INTERPRETATION · NEEDS YOUR CONFIRMATION</span>
+          <h2>{understanding.outcome}</h2>
+          {understanding.knownFacts.length > 0 && <div><h3>Details I found in your description</h3><ul>{understanding.knownFacts.map((fact, i) => <li key={i}>{fact}</li>)}</ul></div>}
+          {understanding.successCriteria.length > 0 && <div><h3>Possible signs of success</h3><ul>{understanding.successCriteria.map((fact, i) => <li key={i}>{fact}</li>)}</ul></div>}
+          {understanding.assumptions.length > 0 && <div><h3>Assumptions to check</h3><ul>{understanding.assumptions.map((fact, i) => <li key={i}>{fact}</li>)}</ul></div>}
+          {understanding.questions.length > 0 && <div><h3>Questions that may change the plan</h3><div>{understanding.questions.map((question) => <label className="field" key={question.id}><span>{question.prompt}{question.required ? ' · required' : ' · optional'}</span>{question.answerType === 'CHOICE' ? <select aria-label={question.prompt} value={answers[question.id] ?? ''} onChange={(event) => setAnswers({ ...answers, [question.id]: event.target.value })}><option value="">Skip for now</option>{question.options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input aria-label={question.prompt} type={question.answerType === 'DATE' ? 'date' : question.answerType === 'NUMBER' ? 'number' : 'text'} value={answers[question.id] ?? ''} onChange={(event) => setAnswers({ ...answers, [question.id]: event.target.value })} /> }<small>{question.why}</small></label>)}</div></div>}
+          {understanding.missingInformation.length > 0 && <p className="muted">Still unknown: {understanding.missingInformation.join(' · ')}</p>}
+          <Button disabled={!!busy || understanding.questions.some((question) => question.required && !answers[question.id]?.trim())} onClick={() => void run('feasibility', () => api.assessGoalFeasibility(workflowInput()), setFeasibility)}>
+            {busy === 'feasibility' ? 'Checking…' : 'Review feasibility'}
+          </Button>
+        </section>
+      )}
+
+      {feasibility && (
+        <section className="panel assistant-panel">
+          <span className="eyebrow">FEASIBILITY · AI PROPOSAL</span>
+          <h2>{feasibility.assessment.replaceAll('_', ' ').toLowerCase()}</h2>
+          <p>{feasibility.summary}</p>
+          {feasibility.concerns.length > 0 && <div><h3>Things to consider</h3><ul>{feasibility.concerns.map((item, i) => <li key={i}>{item}</li>)}</ul></div>}
+          {feasibility.alternatives.length > 0 && <div><h3>Possible alternatives</h3><ul>{feasibility.alternatives.map((item, i) => <li key={i}>{item}</li>)}</ul></div>}
+          {feasibility.assumptions.length > 0 && <p className="muted">Assumptions: {feasibility.assumptions.join(' · ')}</p>}
+          <Button disabled={!!busy} onClick={() => void run('proposal', async () => {
+            const next = await api.proposeGoalStructure(workflowInput());
+            sessionStorage.setItem('flow-up.current-ai-proposal', next.id);
+            setSelected(next.proposalData.items.map((item) => item.id));
+            return next;
+          }, setProposal)}>{busy === 'proposal' ? 'Preparing proposal…' : 'Build a goal structure proposal'}</Button>
+        </section>
+      )}
+
+      {proposal && (
+        <section className="panel assistant-panel">
+          <span className="eyebrow">AI PROPOSAL · NOT SAVED</span>
+          <h2>Review the suggested structure</h2>
+          <p>{proposal.proposalData.summary}</p>
+          <p className="muted">Edit titles, choose items, or reject the proposal. Selected items are added only after you approve.</p>
+          <div className="assistant-proposal-list">
+            {proposal.proposalData.items.map((item) => {
+              const applied = proposal.proposalData.applicationResults?.some((entry) => entry.operation === item.id && entry.success);
+              return <label className="assistant-proposal-item" key={item.id}>
+                <input type="checkbox" checked={selected.includes(item.id)} disabled={!!busy || applied}
+                  onChange={(event) => setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} />
+                <span className="assistant-proposal-item__body">
+                  <span className="eyebrow">{item.type}{item.type === 'MEASUREMENT' ? ` · ${item.valueType ?? 'type needed'}${item.targetValue !== undefined && item.targetValue !== null ? ` · target ${item.targetValue}${item.unit ? ` ${item.unit}` : ''}` : ''}` : ''}{item.targetDate ? ` · ${item.targetDate}` : ''}{applied ? ' · SAVED' : ''}</span>
+                  <input aria-label={`Edit ${item.type.toLowerCase()} title`} value={item.title} disabled={!!busy || applied}
+                    onChange={(event) => updateProposalItem(item.id, { title: event.target.value })} />
+                  <small>{item.parentItemId ? `Under: ${proposal.proposalData.items.find((parent) => parent.id === item.parentItemId)?.title ?? 'parent item'} · ` : 'Root outcome · '}{item.description || item.rationale}</small>
+                </span>
+              </label>;
+            })}
+          </div>
+          <div className="heading-actions">
+            <Button disabled={!!busy || !selected.length} onClick={() => void apply()}>{busy === 'apply' ? 'Applying…' : proposal.status === 'PARTIALLY_APPROVED' ? 'Apply selected remaining items' : 'Approve selected items'}</Button>
+            <Button variant="secondary" disabled={!!busy} onClick={() => void reject()}>{busy === 'reject' ? 'Rejecting…' : 'Reject proposal'}</Button>
+          </div>
+        </section>
+      )}
+    </div>
   );
 }
 
 export function App() {
   const [user, setUser] = useState<UserContext | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [baseDataLoaded, setBaseDataLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [hierarchy, setHierarchy] = useState<GoalNode[]>([]);
@@ -399,7 +596,27 @@ export function App() {
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [actions, setActions] = useState<Action[]>([]);
+  const [editingMilestone, setEditingMilestone] = useState<string | null>(null);
+  const [editingAction, setEditingAction] = useState<string | null>(null);
   const [availableActions, setAvailableActions] = useState<Action[]>([]);
+  const [actionsLoaded, setActionsLoaded] = useState(false);
+  const [actionsLoadError, setActionsLoadError] = useState(false);
+  const [actionRefresh, setActionRefresh] = useState(0);
+  const [upcomingSchedules, setUpcomingSchedules] = useState<Schedule[]>([]);
+  const [schedulesLoaded, setSchedulesLoaded] = useState(false);
+  const [schedulesLoadError, setSchedulesLoadError] = useState(false);
+  const [scheduleRefresh, setScheduleRefresh] = useState(0);
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [measurementLoadState, setMeasurementLoadState] = useState<'LOADING' | 'READY' | 'ERROR'>('LOADING');
+  const [measurementRefresh, setMeasurementRefresh] = useState(0);
+  const [measurementHistory, setMeasurementHistory] = useState<Record<string, MeasurementRecord[]>>({});
+  const [measurementFormOpen, setMeasurementFormOpen] = useState(false);
+  const [measurementLabel, setMeasurementLabel] = useState('');
+  const [measurementType, setMeasurementType] = useState<Measurement['valueType']>('NUMBER');
+  const [measurementUnit, setMeasurementUnit] = useState('');
+  const [measurementTarget, setMeasurementTarget] = useState('');
+  const [measurementValues, setMeasurementValues] = useState<Record<string, string>>({});
+  const [editingMeasurement, setEditingMeasurement] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressSummary | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
@@ -441,6 +658,7 @@ export function App() {
   );
 
   const loadBase = useCallback(async () => {
+    setBaseDataLoaded(false);
     let overview: Awaited<ReturnType<typeof api.workspaceOverview>>;
     try {
       overview = await api.workspaceOverview();
@@ -462,6 +680,7 @@ export function App() {
     ]);
     setGoals(nextGoals);
     setHierarchy(nextHierarchy);
+    setBaseDataLoaded(true);
     setSelectedProject((current) =>
       current
         ? (overview.projects.find((item) => item.id === current.id) ?? null)
@@ -528,6 +747,34 @@ export function App() {
   }, [user, selectedGoal, handleError]);
 
   useEffect(() => {
+    if (!user || !selectedGoal) {
+      setMeasurements([]);
+      setMeasurementHistory({});
+      setMeasurementLoadState('READY');
+      return;
+    }
+    let active = true;
+    setMeasurements([]);
+    setMeasurementLoadState('LOADING');
+    (async () => {
+      try {
+        const next = await api.measurements(selectedGoal.id);
+        const histories = await Promise.all(next.map(async (measurement) => [
+          measurement.id, await api.measurementHistory(measurement.id),
+        ] as const));
+        if (active) {
+          setMeasurements(next);
+          setMeasurementHistory(Object.fromEntries(histories));
+          setMeasurementLoadState('READY');
+        }
+      } catch (error) {
+        if (active) { setMeasurementLoadState('ERROR'); handleError(error); }
+      }
+    })();
+    return () => { active = false; };
+  }, [user, selectedGoal, measurementRefresh, handleError]);
+
+  useEffect(() => {
     if (page !== 'planning' || !user) return;
     let active = true;
     (async () => {
@@ -550,22 +797,52 @@ export function App() {
   }, [page, planningDate, user, handleError]);
 
   useEffect(() => {
-    if (page !== 'planning' || !user || goals.length === 0) {
+    if (page !== 'home' || !user) return;
+    let active = true;
+    setSchedulesLoaded(false);
+    setSchedulesLoadError(false);
+    const end = new Date(`${today()}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() + 7);
+    api.schedules(today(), end.toISOString().slice(0, 10)).then((items) => {
+      if (active) { setUpcomingSchedules(items.sort((a, b) => a.startAt.localeCompare(b.startAt))); setSchedulesLoaded(true); }
+    }).catch((error) => { if (active) { setSchedulesLoadError(true); handleError(error); } });
+    return () => { active = false; };
+  }, [page, user, scheduleRefresh, handleError]);
+
+  useEffect(() => {
+    if (!['planning', 'home'].includes(page) || !user) {
       setAvailableActions([]);
+      setActionsLoaded(false);
+      setActionsLoadError(false);
+      return;
+    }
+    if (goals.length === 0) {
+      setAvailableActions([]);
+      setActionsLoaded(true);
+      setActionsLoadError(false);
       return;
     }
     let active = true;
+    setActionsLoaded(false);
+    setActionsLoadError(false);
     Promise.all(goals.map((goal) => api.actions(goal.id)))
       .then((lists) => {
-        if (active) setAvailableActions(lists.flat());
+        if (active) {
+          setAvailableActions(lists.flat());
+          setActionsLoaded(true);
+        }
       })
       .catch((error) => {
-        if (active) handleError(error);
+        if (active) {
+          setAvailableActions([]);
+          setActionsLoadError(true);
+          handleError(error);
+        }
       });
     return () => {
       active = false;
     };
-  }, [page, user, goals, handleError]);
+  }, [page, user, goals, actionRefresh, handleError]);
 
   const displayedGoals = selectedProject
     ? goals.filter((goal) => goal.projectId === selectedProject.id)
@@ -576,6 +853,9 @@ export function App() {
       .map((node) => node)
       .filter((node) => node.goal.projectId === selectedProject.id);
   }, [hierarchy, selectedProject]);
+  const nextAction = availableActions.find((action) => action.status === 'IN_PROGRESS')
+    ?? availableActions.find((action) => action.status === 'TODO');
+  const nextSchedule = upcomingSchedules[0];
 
   async function authenticated(userContext: UserContext) {
     setUser(userContext);
@@ -613,6 +893,7 @@ export function App() {
     clearToken();
     setUser(null);
     setWorkspace(null);
+    setBaseDataLoaded(false);
     setProjects([]);
     setGoals([]);
     setSelectedGoal(null);
@@ -714,6 +995,114 @@ export function App() {
       handleError(error);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function submitMeasurement(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedGoal) return;
+    let targetValue: number | string | boolean | null = null;
+    if (measurementTarget.trim()) {
+      targetValue = measurementType === 'NUMBER' ? Number(measurementTarget) : measurementType === 'BOOLEAN' ? measurementTarget === 'true' : measurementTarget;
+      if (typeof targetValue === 'number' && !Number.isFinite(targetValue)) {
+        notify({ kind: 'error', text: 'Enter a valid numeric target.' });
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      const created = await api.createMeasurement({
+        goalId: selectedGoal.id,
+        label: measurementLabel.trim(),
+        valueType: measurementType,
+        unit: measurementType === 'NUMBER' ? measurementUnit.trim() || null : null,
+        targetValue: measurementTarget.trim() ? targetValue : null,
+      });
+      setMeasurements((items) => [...items, created]);
+      setMeasurementHistory((items) => ({ ...items, [created.id]: [] }));
+      setMeasurementLabel('');
+      setMeasurementUnit('');
+      setMeasurementTarget('');
+      setMeasurementFormOpen(false);
+      notify({ kind: 'success', text: 'Measurement added.' });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function recordMeasurementValue(measurement: Measurement) {
+    const raw = measurementValues[measurement.id]?.trim();
+    if (raw === undefined || raw === '') return;
+    const value = measurement.valueType === 'NUMBER'
+      ? Number(raw)
+      : measurement.valueType === 'BOOLEAN'
+        ? raw === 'true'
+        : raw;
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      notify({ kind: 'error', text: 'Enter a valid number.' });
+      return;
+    }
+    try {
+      const record = await api.recordMeasurement(measurement.id, { value });
+      setMeasurementHistory((items) => ({
+        ...items,
+        [measurement.id]: [record, ...(items[measurement.id] ?? [])],
+      }));
+      setMeasurementValues((items) => ({ ...items, [measurement.id]: '' }));
+      notify({ kind: 'success', text: 'Value recorded.' });
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  async function saveMilestoneEdit(event: FormEvent<HTMLFormElement>, milestone: Milestone) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      const updated = await api.updateMilestone(milestone.id, {
+        title: String(data.get('title')).trim(),
+        targetDate: String(data.get('targetDate') ?? '') || null,
+      });
+      setMilestones((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setEditingMilestone(null);
+    } catch (error) { handleError(error); }
+  }
+
+  async function saveActionEdit(event: FormEvent<HTMLFormElement>, action: Action) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      const updated = await api.updateAction(action.id, {
+        title: String(data.get('title')).trim(),
+        description: String(data.get('description') ?? '').trim() || null,
+      });
+      setActions((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setEditingAction(null);
+    } catch (error) { handleError(error); }
+  }
+
+  async function submitMeasurementEdit(event: FormEvent<HTMLFormElement>, measurement: Measurement) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const target = String(data.get('targetValue') ?? '').trim();
+    const targetValue = target ? (measurement.valueType === 'NUMBER' ? Number(target) : measurement.valueType === 'BOOLEAN' ? target === 'true' : target) : null;
+    if (typeof targetValue === 'number' && !Number.isFinite(targetValue)) {
+      notify({ kind: 'error', text: 'Enter a valid numeric target.' });
+      return;
+    }
+    try {
+      const updated = await api.updateMeasurement(measurement.id, {
+        label: String(data.get('label')).trim(),
+        unit: measurement.valueType === 'NUMBER' ? String(data.get('unit') ?? '').trim() || null : null,
+        targetValue,
+      });
+      setMeasurements((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setEditingMeasurement(null);
+      notify({ kind: 'success', text: 'Measurement updated.' });
+    } catch (error) {
+      handleError(error);
     }
   }
 
@@ -852,7 +1241,9 @@ export function App() {
         ? 'Projects'
         : page === 'goals'
           ? 'Goals & milestones'
-          : 'Plan your day';
+          : page === 'assistant'
+            ? 'Goal discovery'
+            : 'Plan your day';
   const pageSubtitle =
     page === 'home'
       ? 'A little progress adds up to a lot.'
@@ -860,7 +1251,9 @@ export function App() {
         ? 'Shape your ideas into focused projects.'
         : page === 'goals'
           ? 'Keep your bigger picture close.'
-          : 'Make time for the work that matters.';
+          : page === 'assistant'
+            ? 'Turn an intention into a plan you can review and shape.'
+            : 'Make time for the work that matters.';
 
   return (
     <div className="app-layout">
@@ -950,6 +1343,11 @@ export function App() {
                 ＋ Create daily plan
               </Button>
             )}
+            {page === 'assistant' && (
+              <Button variant="secondary" onClick={() => setPage('goals')}>
+                Continue manually
+              </Button>
+            )}
           </div>
 
           {!workspace && (
@@ -963,6 +1361,17 @@ export function App() {
                 {busy ? 'Setting up…' : 'Create workspace'}
               </Button>
             </section>
+          )}
+
+          {page === 'assistant' && (
+            <GoalAssistantPage
+              onApplied={async () => {
+                await loadBase();
+                setPage('goals');
+                notify({ kind: 'success', text: 'Approved goal structure added to your workspace.' });
+              }}
+              onManual={() => setPage('goals')}
+            />
           )}
 
           {page === 'home' && (
@@ -989,6 +1398,16 @@ export function App() {
                   <span>✳</span>
                 </div>
               </section>
+              <div className="home-next-grid">
+                <section className="panel home-next-card">
+                  <span className="eyebrow">CONTINUE AN ACTION</span>
+                  {actionsLoadError ? <div><strong>Actions unavailable</strong><button type="button" className="text-link" onClick={() => setActionRefresh((value) => value + 1)}>Try again</button></div> : !actionsLoaded ? <p className="empty-line">Loading actions…</p> : nextAction ? <button type="button" className="home-next-card__link" onClick={() => void openExecution(nextAction)}><strong>{nextAction.title}</strong><small>{goals.find((goal) => goal.id === nextAction.goalId)?.title ?? 'Goal'} · {nextAction.status === 'IN_PROGRESS' ? 'In progress' : 'To do'}</small></button> : <div><strong>No open Actions</strong><button type="button" className="text-link" onClick={() => setPage('goals')}>View Goals</button></div>}
+                </section>
+                <section className="panel home-next-card">
+                  <span className="eyebrow">UPCOMING WORK</span>
+                  {schedulesLoadError ? <div><strong>Schedule unavailable</strong><button type="button" className="text-link" onClick={() => setScheduleRefresh((value) => value + 1)}>Try again</button></div> : !schedulesLoaded ? <p className="empty-line">Loading schedule…</p> : nextSchedule ? <button type="button" className="home-next-card__link" onClick={() => { setPlanningDate(nextSchedule.startAt.slice(0, 10)); setPage('planning'); }}><strong>{availableActions.find((action) => action.id === nextSchedule.actionId)?.title ?? 'Scheduled Action'}</strong><small>{new Date(nextSchedule.startAt).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</small></button> : <div><strong>Nothing scheduled this week</strong><button type="button" className="text-link" onClick={() => setPage('planning')}>Open Planning</button></div>}
+                </section>
+              </div>
               <div className="section-title">
                 <div>
                   <h2>Your overview</h2>
@@ -1006,8 +1425,8 @@ export function App() {
                   <span className="stat-card__icon stat-card__icon--peach">
                     ▦
                   </span>
-                  <span className="stat-card__label">ACTIVE PROJECTS</span>
-                  <strong>{projects.length}</strong>
+                  <span className="stat-card__label">PROJECTS</span>
+                  <strong>{baseDataLoaded ? projects.length : '—'}</strong>
                   <small>in your workspace</small>
                 </article>
                 <article className="stat-card">
@@ -1015,7 +1434,7 @@ export function App() {
                     ◎
                   </span>
                   <span className="stat-card__label">YOUR GOALS</span>
-                  <strong>{goals.length}</strong>
+                  <strong>{baseDataLoaded ? goals.length : '—'}</strong>
                   <small>ideas in motion</small>
                 </article>
                 <article className="stat-card">
@@ -1023,7 +1442,7 @@ export function App() {
                     ↗
                   </span>
                   <span className="stat-card__label">COMPLETED ACTIONS</span>
-                  <strong>{goals.length ? '—' : '0'}</strong>
+                  <strong>{actionsLoaded ? availableActions.filter((action) => action.status === 'COMPLETED').length : '—'}</strong>
                   <small>keep showing up</small>
                 </article>
               </div>
@@ -1031,8 +1450,7 @@ export function App() {
                 <section className="panel">
                   <div className="panel__heading">
                     <div>
-                      <h2>Recent projects</h2>
-                      <p>Your active areas of focus</p>
+                      <h2>Projects</h2>
                     </div>
                     <button
                       className="icon-button"
@@ -1085,8 +1503,7 @@ export function App() {
                 <section className="panel focus-panel">
                   <div className="panel__heading">
                     <div>
-                      <h2>Goals in focus</h2>
-                      <p>Your next meaningful steps</p>
+                      <h2>Your Goals</h2>
                     </div>
                     <button
                       className="icon-button"
@@ -1164,7 +1581,7 @@ export function App() {
                         {project.description || 'No description yet'}
                       </small>
                       <span className="project-card__footer">
-                        Open project <b>→</b>
+                        {goals.filter((goal) => goal.projectId === project.id).length} Goals <b>·</b> Open project <b>→</b>
                       </span>
                     </span>
                   </button>
@@ -1262,26 +1679,22 @@ export function App() {
                     </div>
                     <div className="progress-block">
                       <div className="progress-block__heading">
-                        <strong>Progress</strong>
+                        <strong>Outcome progress</strong>
                         <span>
-                          {progress?.goalProgress.progressValue == null
-                            ? 'Not enough data'
+                          {!progress
+                            ? 'Loading'
+                            : progress.goalProgress.progressValue == null
+                            ? progress.goalProgress.calculationStatus === 'RULE_NOT_CONFIGURED'
+                              ? 'Not configured'
+                              : 'Not enough data'
                             : `${Math.round(progress.goalProgress.progressValue)}%`}
                         </span>
                       </div>
-                      <div className="progress-track">
-                        <span
-                          style={{
-                            width: `${Math.max(0, Math.min(100, progress?.goalProgress.progressValue ?? 0))}%`,
-                          }}
-                        />
-                      </div>
-                      <small>
-                        {progress?.calculationStatus
-                          .replaceAll('_', ' ')
-                          .toLowerCase() ??
-                          'Progress updates as actions are completed'}
-                      </small>
+                      {progress?.goalProgress.progressValue != null && <div className="progress-track"><span style={{ width: `${Math.max(0, Math.min(100, progress.goalProgress.progressValue))}%` }} /></div>}
+                      {progress?.actionCompletion?.totalActions ? <div className="progress-block__execution">
+                        <div className="progress-block__heading"><span>Actions complete</span><strong>{progress.actionCompletion.completedActions} / {progress.actionCompletion.totalActions}</strong></div>
+                        <div className="progress-track"><span style={{ width: `${progress.actionCompletion.completionValue ?? 0}%` }} /></div>
+                      </div> : <small>{progress ? 'No actions to count yet.' : 'Loading progress…'}</small>}
                     </div>
                     <div className="detail-actions">
                       <Button
@@ -1310,7 +1723,7 @@ export function App() {
                       </div>
                       {milestones.length ? (
                         milestones.map((milestone) => (
-                          <div className="item-row" key={milestone.id}>
+                          <div className="milestone-item" key={milestone.id}><div className="item-row">
                             <span
                               className={`check-circle ${milestone.status === 'COMPLETED' ? 'check-circle--done' : ''}`}
                             >
@@ -1324,14 +1737,10 @@ export function App() {
                                   : milestone.status.toLowerCase()}
                               </small>
                             </span>
-                            {milestone.status !== 'COMPLETED' && (
-                              <button
-                                className="text-link"
-                                onClick={() => completeMilestone(milestone)}
-                              >
-                                Complete
-                              </button>
-                            )}
+                            {milestone.status !== 'COMPLETED' && <button type="button" className="text-link" onClick={() => setEditingMilestone(editingMilestone === milestone.id ? null : milestone.id)}>{editingMilestone === milestone.id ? 'Close' : 'Edit'}</button>}
+                            {milestone.status !== 'COMPLETED' && <button type="button" className="text-link" onClick={() => completeMilestone(milestone)}>Complete</button>}
+                          </div>
+                          {editingMilestone === milestone.id && <form className="measurement-form" onSubmit={(event) => void saveMilestoneEdit(event, milestone)}><Field label="Milestone" name="title" defaultValue={milestone.title} required /><Field label="Target date" name="targetDate" type="date" defaultValue={milestone.targetDate ?? ''} /><Button>Save milestone</Button></form>}
                           </div>
                         ))
                       ) : (
@@ -1345,7 +1754,7 @@ export function App() {
                       </div>
                       {actions.length ? (
                         actions.map((action) => (
-                          <div className="action-row" key={action.id}>
+                          <div className="action-item" key={action.id}><div className="action-row">
                             <span className="action-row__mark">
                               {action.status === 'COMPLETED' ? '✓' : '↗'}
                             </span>
@@ -1360,7 +1769,15 @@ export function App() {
                                   : ''}
                               </small>
                             </span>
+                            {action.status !== 'COMPLETED' && <button
+                              type="button"
+                              className="text-link"
+                              onClick={() => setEditingAction(editingAction === action.id ? null : action.id)}
+                            >
+                              {editingAction === action.id ? 'Close' : 'Edit'}
+                            </button>}
                             <button
+                              type="button"
                               className="text-link execution-link"
                               onClick={() => openExecution(action)}
                             >
@@ -1383,12 +1800,75 @@ export function App() {
                               </select>
                             )}
                           </div>
+                          {editingAction === action.id && action.status !== 'COMPLETED' && <form className="measurement-form" onSubmit={(event) => void saveActionEdit(event, action)}><Field label="Action" name="title" defaultValue={action.title} required /><label className="field"><span>Details</span><textarea name="description" defaultValue={action.description ?? ''} rows={2} /></label><Button>Save action</Button></form>}
+                          </div>
                         ))
                       ) : (
                         <p className="empty-line">
                           No actions yet. Add a small next step.
                         </p>
                       )}
+                    </div>
+                    <div className="detail-section">
+                      <div className="section-heading">
+                        <h3>Measurements</h3>
+                        <Button type="button" variant="quiet" onClick={() => setMeasurementFormOpen((open) => !open)}>
+                          {measurementFormOpen ? 'Cancel' : '+ Add'}
+                        </Button>
+                      </div>
+                      {measurementFormOpen && (
+                        <form className="measurement-form" onSubmit={(event) => void submitMeasurement(event)}>
+                          <Field label="What will you measure?" value={measurementLabel} onChange={(event) => setMeasurementLabel(event.target.value)} maxLength={120} required />
+                          <label className="field"><span>Value type</span><select value={measurementType} onChange={(event) => setMeasurementType(event.target.value as Measurement['valueType'])}><option value="NUMBER">Number</option><option value="TEXT">Text</option><option value="BOOLEAN">Yes / No</option></select></label>
+                          {measurementType === 'NUMBER' && <Field label="Unit (optional)" value={measurementUnit} onChange={(event) => setMeasurementUnit(event.target.value)} placeholder="e.g. hours, kg" />}
+                          {measurementType === 'BOOLEAN' ? <label className="field"><span>Target (optional)</span><select value={measurementTarget} onChange={(event) => setMeasurementTarget(event.target.value)}><option value="">No target</option><option value="true">Yes</option><option value="false">No</option></select></label> : <Field label="Target (optional)" type={measurementType === 'NUMBER' ? 'number' : 'text'} value={measurementTarget} onChange={(event) => setMeasurementTarget(event.target.value)} />}
+                          <Button disabled={busy || !measurementLabel.trim()}>Save measurement</Button>
+                        </form>
+                      )}
+                      {measurementLoadState === 'LOADING' ? <p className="empty-line">Loading measurements…</p> : measurementLoadState === 'ERROR' ? <div className="inline-error" role="alert">Measurements could not be loaded. <button type="button" className="text-link" onClick={() => setMeasurementRefresh((value) => value + 1)}>Try again</button></div> : measurements.length === 0 ? <p className="empty-line">No measurements yet.</p> : measurements.map((measurement) => {
+                        const history = measurementHistory[measurement.id] ?? [];
+                        const current = history[0];
+                        return (
+                          <article className="measurement-card" key={measurement.id}>
+                            <div className="measurement-card__heading">
+                              <div><strong>{measurement.label}</strong><small>{measurement.unit ?? measurement.valueType.toLowerCase()}{measurement.targetValue !== null ? ` · Target ${measurement.targetValue}${measurement.unit ? ` ${measurement.unit}` : ''}` : ' · No target'}</small></div>
+                              <button type="button" className="text-link" onClick={() => setEditingMeasurement(editingMeasurement === measurement.id ? null : measurement.id)}>{editingMeasurement === measurement.id ? 'Close' : 'Edit'}</button>
+                            </div>
+                            {editingMeasurement === measurement.id && (
+                              <form className="measurement-form" onSubmit={(event) => void submitMeasurementEdit(event, measurement)}>
+                                <Field label="Name" name="label" defaultValue={measurement.label} maxLength={120} required />
+                                {measurement.valueType === 'NUMBER' && <Field label="Unit" name="unit" defaultValue={measurement.unit ?? ''} />}
+                                {measurement.valueType === 'BOOLEAN' ? <label className="field"><span>Target</span><select name="targetValue" defaultValue={measurement.targetValue === null ? '' : String(measurement.targetValue)}><option value="">No target</option><option value="true">Yes</option><option value="false">No</option></select></label> : <Field label="Target" name="targetValue" type={measurement.valueType === 'NUMBER' ? 'number' : 'text'} defaultValue={measurement.targetValue === null ? '' : String(measurement.targetValue)} />}
+                                <Button>Save changes</Button>
+                              </form>
+                            )}
+                            <div className="measurement-card__current"><span>Latest recorded</span><strong>{current ? `${current.value}${measurement.unit ? ` ${measurement.unit}` : ''}` : 'No values yet'}</strong>{current && <small>{dateLabel(current.recordedAt)}</small>}</div>
+                            {history.length >= 2 && measurement.valueType === 'NUMBER' && (() => {
+                              const series = [...history].reverse().filter((record) => typeof record.value === 'number');
+                              if (series.length < 2) return null;
+                              const values = series.map((record) => record.value as number);
+                              const min = Math.min(...values); const max = Math.max(...values);
+                              const points = values.map((value, index) => `${(index / (values.length - 1)) * 100},${28 - (max === min ? 0.5 : (value - min) / (max - min)) * 22}`).join(' ');
+                              return <svg className="measurement-sparkline" viewBox="0 0 100 32" role="img" aria-label={`${measurement.label} history, ${series.length} recorded values`} preserveAspectRatio="none"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>;
+                            })()}
+                            {measurement.valueType === 'BOOLEAN' ? (
+                              <label className="field"><span>Record value</span><select value={measurementValues[measurement.id] ?? ''} onChange={(event) => setMeasurementValues((items) => ({ ...items, [measurement.id]: event.target.value }))}><option value="">Choose…</option><option value="true">Yes</option><option value="false">No</option></select></label>
+                            ) : (
+                              <Field label="Record value" type={measurement.valueType === 'NUMBER' ? 'number' : 'text'} value={measurementValues[measurement.id] ?? ''} onChange={(event) => setMeasurementValues((items) => ({ ...items, [measurement.id]: event.target.value }))} />
+                            )}
+                            <Button type="button" variant="secondary" disabled={!measurementValues[measurement.id]} onClick={() => void recordMeasurementValue(measurement)}>Record</Button>
+                            {history.length > 1 && <details className="measurement-history"><summary>History · {history.length}</summary><ol>{history.map((record) => <li key={record.id}><strong>{record.value}{measurement.unit ? ` ${measurement.unit}` : ''}</strong><time>{dateLabel(record.recordedAt)}</time></li>)}</ol></details>}
+                          </article>
+                        );
+                      })}
+                    </div>
+                    <div className="detail-section">
+                      <div className="section-heading"><h3>Review</h3><span>Saved evidence</span></div>
+                      <div className="review-evidence">
+                        <div><span>Actions complete</span><strong>{progress?.actionCompletion?.totalActions ? `${progress.actionCompletion.completedActions} of ${progress.actionCompletion.totalActions}` : progress ? 'No active Actions' : 'Loading'}</strong></div>
+                        <div><span>Measurements with values</span><strong>{measurements.filter((measurement) => (measurementHistory[measurement.id]?.length ?? 0) > 0).length} of {measurementLoadState === 'READY' ? measurements.length : '—'}</strong></div>
+                      </div>
+                      <small className="review-evidence__note">Goal outcome progress is not calculated until its rule is configured.</small>
                     </div>
                   </>
                 ) : (

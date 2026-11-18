@@ -3,3 +3,6 @@ export * from "./ai-orchestration.errors";
 export * from "./ai-orchestration.validation";
 export * from "./ai-orchestration.repository";
 export * from "./ai-orchestration.service";
+export * from "./gemini.provider";
+export * from "./sqlite-ai.repository";
+export * from "./ai-adapters";

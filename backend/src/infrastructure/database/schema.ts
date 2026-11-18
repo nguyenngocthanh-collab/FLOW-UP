@@ -116,4 +116,56 @@ CREATE TABLE IF NOT EXISTS schedules (
 
 CREATE INDEX IF NOT EXISTS idx_schedules_action_id ON schedules(action_id);
 CREATE INDEX IF NOT EXISTS idx_schedules_daily_plan_id ON schedules(daily_plan_id);
+
+-- B06 Measurement definitions and immutable value history.
+CREATE TABLE IF NOT EXISTS measurements (
+  id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  description TEXT,
+  value_type TEXT NOT NULL,
+  unit TEXT,
+  target_value TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_measurements_goal_id ON measurements(goal_id);
+
+CREATE TABLE IF NOT EXISTS measurement_records (
+  id TEXT PRIMARY KEY,
+  measurement_id TEXT NOT NULL REFERENCES measurements(id) ON DELETE CASCADE,
+  value_json TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  note TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_measurement_records_measurement_recorded
+  ON measurement_records(measurement_id, recorded_at, created_at);
+
+-- B10 owns these AI workflow records; domain tables remain owned by their modules.
+CREATE TABLE IF NOT EXISTS ai_proposals (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  operation_type TEXT NOT NULL,
+  proposal_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  proposal_data TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_proposals_user_created
+  ON ai_proposals(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS ai_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_usage_user_created
+  ON ai_usage(user_id, created_at);
 `;

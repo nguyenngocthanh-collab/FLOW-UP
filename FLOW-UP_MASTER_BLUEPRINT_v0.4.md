@@ -19444,3 +19444,92 @@ The MVP must implement Measurement without accidentally creating a general-purpo
 ---
 
 **END OF MASTER BLUEPRINT — v0.4**
+
+# IMPLEMENTATION ADDENDUM — 2026-11-18
+
+This addendum records verified repository implementation status. It does not change unresolved product or domain decisions in v0.4.
+
+## Product evolution and current slice
+
+FLOW-UP now includes an optional, event-triggered AI Goal Discovery path within the existing authenticated application. The user can submit an intention, inspect a structured interpretation and clarification questions, request feasibility feedback, edit/select a Goal/Milestone/Action proposal, and explicitly approve application. AI results remain separate from official domain data until approval. Users can continue manually when AI is unavailable.
+
+The source inventory and concept-by-concept reconciliation are recorded in `docs/FLOW_UP_PRODUCT_EVOLUTION_AUDIT.md`. Local setup and current limitations are documented in `docs/LOCAL_DEMO.md`.
+
+## Module and persistence status
+
+- **B10:** Added a server-side Gemini provider adapter, operation schemas, output validation, proposal persistence, daily usage limits, and authenticated API routes. B10 persists proposals and usage counters in its own `ai_proposals` and `ai_usage` tables.
+- **B03–B05:** Approved proposal items are applied through existing Goal, Milestone, and Action services. B10 does not write to their tables directly.
+- **A10:** Added the structured Goal Discovery and proposal review screen to the existing React application. It distinguishes AI proposals from saved records and offers a manual route.
+- **Database/API:** Added additive SQLite tables and routes for understanding, feasibility, proposal creation/retrieval/edit/reject/apply. Existing API authentication and response envelopes are reused.
+- **Dependencies/configuration:** Added `@google/genai` 3.5.0. `GEMINI_API_KEY` remains server-only. Model, timeout, per-user limit and global limit use environment configuration.
+
+Proposal application uses a database compare-and-set state transition to prevent concurrent approval from applying twice. Item results are retained and partial results can be retried without reapplying successful items. A process crash while a proposal is in `APPLYING` still needs an explicit recovery policy; do not represent this as crash-proof exactly-once execution.
+
+## AI behavior and provider status
+
+- Model configured by default: `gemini-3.8-flash`.
+- Implemented operations: goal understanding/clarification, feasibility feedback, structured Goal/Milestone/Action proposal, explicit review and application.
+- Structured output uses provider JSON Schema plus server-side semantic validation.
+- Limits: 4,000 input characters, 18 proposal items, 20-second default timeout (configurable up to 60 seconds), 12 calls per user per UTC day and 90 calls globally per UTC day by default.
+- Missing key, invalid output, provider errors, timeout and rate limiting return clear errors without blocking manual Goal workflows.
+- Every clarification extraction remains `NEEDS_CONFIRMATION`; structures remain `AI_PROPOSED` until user approval.
+- Google confirms Gemini 3.8 Flash is stable and documents `@google/genai` and structured outputs. Free-tier availability/rates vary, may change, and Google may use Free-tier content to improve products. The UI discloses this and warns against sending sensitive information.
+- **Live Gemini request: NOT VERIFIED.** No provider key was configured for this session. Mocked provider responses were used for automated end-to-end tests.
+
+## Verification evidence
+
+- Frontend typecheck: PASS.
+- Backend typecheck: PASS.
+- Frontend tests: PASS, 4 tests.
+- Backend tests: PASS, 185 tests across 39 files.
+- Production build: PASS, emitted to a temporary directory.
+- Full repository lint: FAIL, 19 existing errors in domain/service/test/scratch files. Focused lint for the new/modified AI, route, server, and frontend implementation passed.
+- Fresh SQLite initialization: PASS on a temporary database.
+- Backend startup and health check: PASS.
+- Frontend startup and frontend-to-backend proxy/API requests: PASS.
+- Manual account registration, workspace creation, Goal persistence/read and AI-unavailable fallback: PASS.
+- Mocked discovery → feasibility → proposal → approval → Goal/Milestone/Action persistence across server restart: PASS. Duplicate approval was rejected.
+- Browser-driven E2E: NOT RUN; the repository has no configured browser E2E runner.
+- Existing `data/flow-up.db` was not used or modified for runtime verification.
+
+## Remaining work and open decisions
+
+- Complete Measurement HTTP routes/UI before claiming the Measurement workflow is integrated.
+- Define durable recovery for proposals left in `APPLYING` after process failure.
+- AI Daily Plan, AI Review/improvement and adjustment proposals are not implemented.
+- Review routes/UI and authoritative progress behavior remain constrained by existing C08/C09 decisions.
+- Core/Critical Goal, Stage/Chunk, resource persistence, risk persistence and Docs/Notes ownership remain OPEN as documented in the audit.
+- Real Gemini provider success, timeout and quota behavior still need a keyed environment test; normal test runs remain deterministic and mocked.
+- Resolve the 19 repository lint errors in a separately scoped cleanup.
+
+## Implementation update — Measurement and focused execution surfaces (2026-11-18)
+
+This implementation update records the current web MVP state. It supersedes earlier remaining-work bullets above where they state that Measurement routes/UI are absent or that AI proposals only apply Goal/Milestone/Action. It does not close the still-open C08/C09 progress and review decisions.
+
+### B06 Measurement
+
+- Authenticated HTTP operations now create/list/get/update/archive definitions, append typed values, and retrieve current value/history through the existing B06 service.
+- SQLite storage is additive and idempotently initialized with `measurements` and `measurement_records`; existing rows/tables are not reset.
+- MVP accepted types are `NUMBER`, `TEXT`, and `BOOLEAN`. Units are numeric-only. Records are immutable; unit changes are rejected after values exist.
+- Current value resolves deterministically by descending `recordedAt`, then `createdAt`, then ID. This is an implementation policy for the current UI, not a baseline/target-direction rule.
+- The Goal detail UI supports create/edit, value capture, history, and a numeric sparkline only when at least two values exist.
+
+### B08 Progress and review boundaries
+
+- The API reports an Action completion metric using completed active Actions divided by total active Actions. Empty Action sets are `NOT_APPLICABLE`, not zero percent.
+- This metric is labeled “Actions complete” and is not used as Goal outcome progress.
+- Goal outcome percentage and Measurement target progress remain `RULE_NOT_CONFIGURED` while target direction and mixed-source aggregation remain OPEN. Current and target values may be displayed, but no inferred percentage is produced.
+- Review progress reads return actual B05/B06 evidence. Persisted review notes/history and the complete Review interface remain unimplemented.
+
+### B10 and connected UI
+
+- User-approved Goal Tree proposals may now include Measurement definitions. B10 validates them and applies through B06; it does not mutate B06 tables directly.
+- The home surface reads existing Actions and Schedules for its next Action and upcoming work and shows loading, error, and empty states.
+- Goal Tree nodes expand independently. Unfinished Milestones and Actions can be edited in the Goal detail view.
+- Goal discovery preserves draft input in tab-scoped session storage and guards concurrent AI requests. Gemini remains optional; manual workflows are unchanged.
+
+### Verification status
+
+- Frontend/backend typechecks, 6 frontend tests, 185 backend tests, focused lint, and production build passed after the implementation.
+- API integration tests cover Measurement authorization, cross-user denial, validation, persistence across restart, and AI proposal application.
+- Live Gemini verification was attempted with configured credentials but outbound network access failed with `EACCES`; browser-driven E2E remains unavailable in this repository.

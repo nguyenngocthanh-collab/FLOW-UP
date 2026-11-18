@@ -33,8 +33,9 @@ The access token is stored in `sessionStorage`, so it survives refreshes in the 
 - Personal workspace initialization and current workspace overview.
 - Project list, project creation, and navigation into project goals.
 - Goal list and hierarchy, goal creation, child goals, milestones, and actions.
+- Expandable Goal Tree with milestone/action editing and Goal Measurement capture, editing, history, and numeric trend sparkline.
 - Milestone completion, action status changes, and execution notes/timestamps.
 - Daily plan creation, action scheduling, and schedule removal.
 - Goal progress summary using the backend response.
 
-The backend currently returns `RULE_NOT_CONFIGURED` for goal progress calculation. The screen shows that state without inventing a percentage. The API currently supports one personal workspace per user, so there is no multi-workspace picker. Measurement and review HTTP routes, historical progress snapshots, and goal move/archive/delete routes are not available and are not simulated in the UI.
+The screen shows deterministic Action completion separately from Goal outcome progress. Goal outcome progress remains `RULE_NOT_CONFIGURED`; target direction and mixed-source aggregation have not been approved, so the UI does not invent a percentage. Measurement definitions and values are persisted through authenticated B06 routes; Review note history, historical progress snapshots, and Goal move/archive/delete routes are not available. The API supports one personal workspace per user, so there is no multi-workspace picker.

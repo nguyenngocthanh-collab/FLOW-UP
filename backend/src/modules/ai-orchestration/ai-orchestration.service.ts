@@ -6,6 +6,7 @@ import type {
 import type {
   AIContextReader, AIOrchestrationRules, AIOutputValidator, AIProposalDomainApplier,
   AIProposalRepository, AIProvider,
+  AIUsageReservation,
 } from "./ai-orchestration.repository";
 import { validateAIRequest, validateProviderResponse } from "./ai-orchestration.validation";
 
@@ -22,6 +23,7 @@ export class AIOrchestrationService {
     private readonly proposals: AIProposalRepository,
     private readonly domainApplier: AIProposalDomainApplier,
     private readonly rules: AIOrchestrationRules,
+    private readonly usage?: AIUsageReservation,
   ) {}
 
   async execute(
@@ -32,6 +34,9 @@ export class AIOrchestrationService {
   ): Promise<unknown> {
     this.assertAuthenticated(user);
     const context = await this.loadContext(user.userId, operation, userInput, references);
+    if (this.usage && !this.usage.reserve(user.userId)) {
+      throw new AIOrchestrationError("AI_USAGE_LIMIT_EXCEEDED", "The daily AI usage limit has been reached. Continue manually or try again tomorrow.");
+    }
     const providerRequest: AIProviderRequest = {
       operationType: operation,
       input: userInput,
@@ -115,7 +120,7 @@ export class AIOrchestrationService {
       updatedAt: this.rules.now(),
     };
     try {
-      return await this.proposals.update(updated);
+      return await this.proposals.update(updated, current.status);
     } catch (error) {
       throw new AIOrchestrationError("AI_PERSISTENCE_ERROR", "Unable to update proposal.", error);
     }
@@ -123,10 +128,10 @@ export class AIOrchestrationService {
 
   async rejectProposal(user: AIUserContext, proposalId: string): Promise<AIProposal> {
     const current = await this.getProposal(user, proposalId);
-    if (!["PENDING_REVIEW", "EDITED"].includes(current.status)) {
+    if (!["PENDING_REVIEW", "EDITED", "PARTIALLY_APPROVED", "FAILED"].includes(current.status)) {
       throw new AIOrchestrationError("AI_PROPOSAL_INVALID_STATE", "Proposal cannot be rejected in its current state.");
     }
-    return this.saveProposal({ ...current, status: "REJECTED", updatedAt: this.rules.now() });
+    return this.saveProposal({ ...current, status: "REJECTED", updatedAt: this.rules.now() }, current.status);
   }
 
   async approveAndApplyProposal(
@@ -135,12 +140,19 @@ export class AIOrchestrationService {
     selection: AIProposalSelection,
   ): Promise<AIProposalApplicationResult> {
     const current = await this.getProposal(user, proposalId);
-    if (!["PENDING_REVIEW", "EDITED"].includes(current.status)) {
+    if (!["PENDING_REVIEW", "EDITED", "PARTIALLY_APPROVED", "FAILED"].includes(current.status)) {
       if (current.status === "APPLIED") throw new AIOrchestrationError("AI_PROPOSAL_ALREADY_APPLIED", "Proposal has already been applied.");
       throw new AIOrchestrationError("AI_PROPOSAL_INVALID_STATE", "Proposal is not eligible for approval.");
     }
-    if (!selection || !Array.isArray(selection.selectedItemIds)) {
+    if (!selection || !Array.isArray(selection.selectedItemIds) || selection.selectedItemIds.length === 0) {
       throw new AIOrchestrationError("AI_APPROVAL_REQUIRED", "An explicit item selection is required.");
+    }
+
+    const previous = current.proposalData as { applicationResults?: AIProposalApplicationResult["operations"] };
+    const previouslyApplied = new Set((previous?.applicationResults ?? [])
+      .filter((item) => item.success).map((item) => item.operation));
+    if (selection.selectedItemIds.some((id) => previouslyApplied.has(id))) {
+      throw new AIOrchestrationError("AI_PROPOSAL_ALREADY_APPLIED", "Previously applied proposal items cannot be applied twice.");
     }
 
     try {
@@ -149,20 +161,28 @@ export class AIOrchestrationService {
       throw new AIOrchestrationError("AI_PROPOSAL_VALIDATION_FAILED", "Approved proposal items failed domain validation.", error);
     }
 
+    const claimed = await this.proposals.claimForApplication(current.id, user.userId, this.rules.now());
+    if (!claimed) throw new AIOrchestrationError("AI_PROPOSAL_INVALID_STATE", "Proposal application is already running or no longer available.");
+
     let result: AIProposalApplicationResult;
     try {
       result = await this.domainApplier.applyApprovedProposal(user.userId, current, selection);
     } catch (error) {
+      await this.saveProposal({ ...current, status: previouslyApplied.size ? "PARTIALLY_APPROVED" : "FAILED", updatedAt: this.rules.now() }, "APPLYING");
       throw new AIOrchestrationError("AI_PROPOSAL_APPLICATION_FAILED", "Applying approved proposal failed.", error);
     }
-
-    const nextStatus = result.status === "APPLIED"
-      ? "APPLIED"
-      : result.status === "PARTIALLY_APPLIED"
-        ? "PARTIALLY_APPROVED"
-        : "FAILED";
-    await this.saveProposal({ ...current, status: nextStatus, updatedAt: this.rules.now() });
-    return result;
+    const combined = [...(previous?.applicationResults ?? []), ...result.operations];
+    const allItemIds = Array.isArray((current.proposalData as { items?: unknown[] })?.items)
+      ? (current.proposalData as { items: { id: string }[] }).items.map((item) => item.id) : [];
+    const complete = allItemIds.length > 0 && allItemIds.every((id) => combined.some((item) => item.operation === id && item.success));
+    const hasSuccess = combined.some((item) => item.success);
+    const nextStatus = complete ? "APPLIED" : hasSuccess ? "PARTIALLY_APPROVED" : "FAILED";
+    await this.saveProposal({
+      ...current, status: nextStatus,
+      proposalData: { ...(current.proposalData as Record<string, unknown>), applicationResults: combined },
+      updatedAt: this.rules.now(),
+    }, "APPLYING");
+    return { ...result, status: complete ? "APPLIED" : hasSuccess ? "PARTIALLY_APPLIED" : "FAILED", operations: combined };
   }
 
   private async loadContext(
@@ -184,8 +204,8 @@ export class AIOrchestrationService {
     }
   }
 
-  private async saveProposal(proposal: AIProposal): Promise<AIProposal> {
-    try { return await this.proposals.update(proposal); }
+  private async saveProposal(proposal: AIProposal, expectedStatus?: AIProposal["status"]): Promise<AIProposal> {
+    try { return await this.proposals.update(proposal, expectedStatus); }
     catch (error) { throw new AIOrchestrationError("AI_PERSISTENCE_ERROR", "Unable to update proposal state.", error); }
   }
 
@@ -196,6 +216,7 @@ export class AIOrchestrationService {
   }
 
   private normalizeProviderError(error: unknown): AIOrchestrationError {
+    if (error instanceof AIOrchestrationError) return error;
     const candidate = error as { code?: string; status?: number; name?: string };
     if (candidate?.code === "TIMEOUT" || candidate?.name === "TimeoutError") {
       return new AIOrchestrationError("AI_REQUEST_TIMEOUT", "AI provider request timed out.", error);

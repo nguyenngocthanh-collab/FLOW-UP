@@ -65,6 +65,14 @@ Register and login require a non-empty email and password; service validation re
 | Progress | `GET /api/progress/goals/:goalId` | none | goal progress summary | Goal ownership checked |
 | Progress | `POST /api/progress/summary` | `{ goalIds: string[] }` | progress summaries | Goal ownership checked for each goal |
 | Progress | `GET /api/progress/reviews/:goalId` | none | review progress data | Goal ownership checked |
+| Measurement | `GET /api/goals/:goalId/measurements` | none | active Measurement definitions | Goal ownership checked |
+| Measurement | `POST /api/measurements` | goal ID, label, value type, optional unit/target | Measurement definition | Goal ownership checked |
+| Measurement | `GET /api/measurements/:id` | none | Measurement definition | Goal ownership checked through Goal |
+| Measurement | `PATCH /api/measurements/:id` | label, description, unit and/or target | updated Measurement | Goal ownership checked; unit cannot change after records exist |
+| Measurement | `DELETE /api/measurements/:id` | none | archived Measurement | Goal ownership checked |
+| Measurement | `POST /api/measurements/:id/records` | typed value, optional recordedAt/note | immutable value record | Goal ownership checked |
+| Measurement | `GET /api/measurements/:id/current` | none | latest record or null | Ordered by recordedAt, createdAt, then ID |
+| Measurement | `GET /api/measurements/:id/history` | optional from/to/offset/limit | records newest first | limit is capped at 200; Goal ownership checked |
 
 The request types are defined in `backend/src/modules/*/*.types.ts`; route validation and status transitions are implemented in the corresponding service and validation files. The endpoint list deliberately excludes module operations without registered HTTP routes.
 
@@ -79,6 +87,7 @@ The request types are defined in `backend/src/modules/*/*.types.ts`; route valid
 7. Create a daily plan with `POST /api/planning/daily-plans`, attach actions, or create dated schedules directly.
 8. Record execution with `POST /api/actions/:id/execution` and update action status via `PATCH /api/actions/:id/status`.
 9. Retrieve progress with `GET /api/progress/goals/:goalId` or `POST /api/progress/summary`.
+10. Create a Measurement for a Goal, record values, and read current/history through the Measurement endpoints.
 
 ## Validation, errors, and environment
 
@@ -89,8 +98,14 @@ Protected data calls must use the authenticated identity; workspace, goal, miles
 ## Not implemented through the HTTP API
 
 - Review creation/update endpoints are not registered.
-- Measurement endpoints are not registered.
 - Goal movement, archival/deletion, and hierarchy reordering operations are not exposed as HTTP routes.
+- Review note creation/update endpoints are not registered; the review read endpoint returns evidence/progress data only.
 - There is no token revocation endpoint/session blacklist; logout is client-side token disposal.
 
-Do not build frontend calls for these operations until routes and contracts are implemented and verified.
+Do not build frontend calls for operations that do not have registered routes and contracts.
+
+### Measurement and progress semantics
+
+- The web MVP accepts Measurement types `NUMBER`, `TEXT`, and `BOOLEAN`; units are numeric-only. Values are append-only history records.
+- Action completion reports completed active Actions divided by total active Actions. This is an execution metric, not Goal outcome progress.
+- Goal outcome percentages remain unconfigured because target direction and mixed-source aggregation rules are still open. No percentage is inferred from a Measurement target.

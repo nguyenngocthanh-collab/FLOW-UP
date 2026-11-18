@@ -12,6 +12,8 @@ import { registerMilestoneRoutes } from "./routes/milestone.routes.ts";
 import { registerActionRoutes } from "./routes/action.routes.ts";
 import { registerPlanningRoutes } from "./routes/planning.routes.ts";
 import { registerProgressRoutes } from "./routes/progress.routes.ts";
+import { registerAIRoutes } from "./routes/ai.routes.ts";
+import { registerMeasurementRoutes } from "./routes/measurement.routes.ts";
 
 export * from "./types.ts";
 export * from "./http.ts";
@@ -29,6 +31,8 @@ export function createRouter(): Router {
   registerActionRoutes(router);
   registerPlanningRoutes(router);
   registerProgressRoutes(router);
+  registerAIRoutes(router);
+  registerMeasurementRoutes(router);
 
   return router;
 }

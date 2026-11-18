@@ -1,5 +1,10 @@
 
+import { randomUUID } from "node:crypto";
 import type { DatabaseConnection } from "../infrastructure/database/sqlite.ts";
+import { AIOrchestrationService, GeminiAIProvider, SqliteAIProposalRepository,
+  GoalDiscoveryContextReader, GoalDiscoveryOutputValidator, GoalProposalDomainApplier,
+  AIUsageLimiter } from "../modules/ai-orchestration/index.ts";
+import type { AIProvider } from "../modules/ai-orchestration/ai-orchestration.repository";
 
 import {
   SqliteWorkspaceRepository,
@@ -66,6 +71,8 @@ import {
   type ProgressRules,
   type ProgressSourceAccess
 } from "../modules/progress/index.ts";
+import { MeasurementError, MeasurementService, MVPMeasurementRules } from "../modules/measurement/index.ts";
+import { SqliteMeasurementRepository } from "../infrastructure/repositories/sqlite-measurement.repository.ts";
 
 export interface ApplicationContainer {
   connection: DatabaseConnection;
@@ -78,6 +85,8 @@ export interface ApplicationContainer {
   actionService: ActionService;
   planningService: PlanningService;
   progressService: ProgressService;
+  measurementService: MeasurementService;
+  aiService: AIOrchestrationService;
   repositories: {
     workspace: SqliteWorkspaceRepository;
     goal: SqliteGoalRepository;
@@ -89,6 +98,7 @@ export interface ApplicationContainer {
 
 export interface ContainerConfig {
   auth?: AuthConfig;
+  ai?: { apiKey?: string; model?: string; timeoutMs?: number; perUserDaily?: number; globalDaily?: number; provider?: AIProvider };
 }
 
 export function createApplicationContainer(
@@ -101,6 +111,7 @@ export function createApplicationContainer(
   const milestoneRepo = new SqliteMilestoneRepository(connection);
   const actionRepo = new SqliteActionRepository(connection);
   const planningRepo = new SqlitePlanningRepository(connection);
+  const measurementRepo = new SqliteMeasurementRepository(connection);
 
   // 2. Auth & Token Verifier
   const authConfig: AuthConfig = config.auth ?? {};
@@ -388,24 +399,38 @@ export function createApplicationContainer(
         goalId
       );
 
-      const actions = await actionRepo.listByGoal(goalId);
-
-      const completedCount = actions.filter(
-        (a) => a.status === "COMPLETED"
-      ).length;
+      const actions = (await actionRepo.listByGoal(goalId)).filter((action) => !action.archivedAt);
+      const completedCount = actions.filter((action) => action.status === "COMPLETED").length;
+      const definitions = await measurementRepo.listMeasurementsByGoal(goalId, false);
+      const measurementResults = await Promise.all(definitions.map(async (measurement) => {
+        const record = (await measurementRepo.listRecords(measurement.id, { limit: 1 }))[0] ?? null;
+        const comparable = record !== null && measurement.targetValue !== null;
+        return {
+          measurementId: measurement.id,
+          currentValue: record?.value ?? null,
+          targetValue: measurement.targetValue,
+          progressValue: null,
+          calculationStatus: comparable ? "RULE_NOT_CONFIGURED" as const : "INSUFFICIENT_DATA" as const,
+          calculationContext: {
+            unit: measurement.unit,
+            latestRecordedAt: record?.recordedAt ?? null,
+            reason: !record ? "No value has been recorded." : measurement.targetValue === null ? "No target is defined." : "Target direction is undefined; no percentage is inferred."
+          }
+        };
+      }));
 
       return {
-        measurementResults: [],
+        measurementResults,
 
         actionResult: {
           goalId,
           totalActions: actions.length,
           completedActions: completedCount,
           incompleteActions: actions.length - completedCount,
-          completionValue: null,
-          calculationStatus: "RULE_NOT_CONFIGURED" as const,
+          completionValue: actions.length ? (completedCount / actions.length) * 100 : null,
+          calculationStatus: actions.length ? "CALCULATED" as const : "NOT_APPLICABLE" as const,
           calculationContext: {
-            note: "B08 rules open / not configured"
+            note: "Completed active Actions divided by total active Actions; this is execution completion, not Goal outcome progress."
           }
         },
 
@@ -433,23 +458,16 @@ export function createApplicationContainer(
     },
 
     calculateActionCompletion(input: unknown) {
-      const typed = (input ?? {}) as {
-        goalId?: string;
-        actions?: unknown[];
-      };
-
-      const total = Array.isArray(typed.actions)
-        ? typed.actions.length
-        : 0;
-
+      const typed = (input ?? {}) as { goalId?: string; actions?: Array<{ status?: string; archived?: boolean }> };
+      const actions = (typed.actions ?? []).filter((action) => !action.archived);
+      const total = actions.length;
+      const completed = actions.filter((action) => action.status === "COMPLETED").length;
       return {
-        goalId: typed.goalId ?? "",
-        totalActions: total,
-        completedActions: 0,
-        incompleteActions: total,
-        completionValue: null,
-        calculationStatus: "RULE_NOT_CONFIGURED",
-        calculationContext: {}
+        goalId: typed.goalId ?? "", totalActions: total, completedActions: completed,
+        incompleteActions: total - completed,
+        completionValue: total ? (completed / total) * 100 : null,
+        calculationStatus: total ? "CALCULATED" as const : "NOT_APPLICABLE" as const,
+        calculationContext: { rule: "completed active Actions / total active Actions", metric: "ACTION_COMPLETION" }
       };
     },
 
@@ -495,6 +513,33 @@ export function createApplicationContainer(
     progressRules
   );
 
+  const measurementService = new MeasurementService(
+    measurementRepo,
+    {
+      async assertCanAccessGoal(user, goalId) {
+        const result = await goalService.getGoal(user, goalId);
+        if (!result.success) throw new MeasurementError("MEASUREMENT_ACCESS_DENIED", "Goal is not accessible.");
+      }
+    },
+    new MVPMeasurementRules(),
+  );
+
+  const aiConfig = config.ai ?? {};
+  const aiService = new AIOrchestrationService(
+    new GoalDiscoveryContextReader(),
+    aiConfig.provider ?? new GeminiAIProvider(aiConfig.apiKey, aiConfig.model, aiConfig.timeoutMs),
+    new GoalDiscoveryOutputValidator(18),
+    new SqliteAIProposalRepository(connection),
+    new GoalProposalDomainApplier({ goalService, milestoneService, actionService, measurementService }),
+    {
+      validation: { maxInputLength: 4000, maxContextBytes: 12000, maxProposalItems: 18 },
+      now: () => new Date().toISOString(),
+      createProposalId: randomUUID,
+      proposalPersistenceEnabled: true,
+    },
+    new AIUsageLimiter(connection, aiConfig.perUserDaily ?? 12, aiConfig.globalDaily ?? 90),
+  );
+
   return {
     connection,
     authService,
@@ -506,6 +551,8 @@ export function createApplicationContainer(
     actionService,
     planningService,
     progressService,
+    measurementService,
+    aiService,
     repositories: {
       workspace: workspaceRepo,
       goal: goalRepo,

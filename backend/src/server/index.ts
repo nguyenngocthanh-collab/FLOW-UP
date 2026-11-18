@@ -38,6 +38,11 @@ function loadEnv(): void {
 
 loadEnv();
 
+function positiveLimit(name: string, fallback: number, max: number): number {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) ? Math.max(1, Math.min(max, Math.trunc(value))) : fallback;
+}
+
 const port = Number(process.env.PORT || 3001);
 const dbPath = process.env.DATABASE_PATH || "./data/flow-up.db";
 const corsOrigin = process.env.CORS_ORIGIN || "*";
@@ -79,7 +84,14 @@ const app = createApp({
       supabaseUrl: process.env.SUPABASE_URL,
       supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
       devMode
-    }
+    },
+    ai: {
+      apiKey: process.env.GEMINI_API_KEY,
+      model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
+      timeoutMs: positiveLimit("AI_TIMEOUT_MS", 20000, 60000),
+      perUserDaily: positiveLimit("AI_DAILY_USER_LIMIT", 12, 100),
+      globalDaily: positiveLimit("AI_DAILY_GLOBAL_LIMIT", 90, 1000),
+    },
   }
 });
 

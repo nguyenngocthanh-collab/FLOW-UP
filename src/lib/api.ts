@@ -73,6 +73,15 @@ export interface Execution {
   actualDurationMinutes: number | null;
   executionNote: string | null;
 }
+export interface Measurement {
+  id: string; goalId: string; label: string; description: string | null;
+  valueType: 'NUMBER' | 'TEXT' | 'BOOLEAN'; unit: string | null;
+  targetValue: number | string | boolean | null; createdAt: string; updatedAt: string; archivedAt: string | null;
+}
+export interface MeasurementRecord {
+  id: string; measurementId: string; value: number | string | boolean;
+  recordedAt: string; createdAt: string; note: string | null;
+}
 export interface DailyPlan {
   id: string;
   userId: string;
@@ -108,11 +117,48 @@ export interface ProgressSummary {
   actionCompletion: {
     totalActions: number | null;
     completedActions: number | null;
+    incompleteActions?: number | null;
     completionValue: number | null;
     calculationStatus: string;
+    calculationContext?: Record<string, unknown>;
   } | null;
   childGoalProgress: unknown[];
   calculationStatus: string;
+}
+export interface AIClarification {
+  outcome: string;
+  successCriteria: string[];
+  knownFacts: string[];
+  assumptions: string[];
+  missingInformation: string[];
+  questions: { id: string; prompt: string; why: string; answerType: string; required: boolean; options: string[] }[];
+  provenance: 'NEEDS_CONFIRMATION';
+}
+export interface AIFeasibility {
+  assessment: 'FEASIBLE' | 'CONCERN' | 'INSUFFICIENT_INFORMATION';
+  summary: string;
+  concerns: string[];
+  alternatives: string[];
+  assumptions: string[];
+  missingInformation: string[];
+  provenance: 'AI_PROPOSED';
+}
+export interface AIProposalItem {
+  id: string;
+  type: 'GOAL' | 'MILESTONE' | 'ACTION' | 'MEASUREMENT';
+  title: string;
+  description: string;
+  targetDate: string | null;
+  parentItemId: string | null;
+  rationale: string;
+  valueType?: 'NUMBER' | 'TEXT' | 'BOOLEAN' | null;
+  unit?: string | null;
+  targetValue?: number | string | boolean | null;
+}
+export interface AIProposal {
+  id: string;
+  status: string;
+  proposalData: { summary: string; items: AIProposalItem[]; provenance: 'AI_PROPOSED'; applicationResults?: { operation: string; success: boolean; entityId?: string; errorCode?: string }[] };
 }
 
 export class ApiError extends Error {
@@ -247,6 +293,8 @@ export const api = {
   }) => post<Milestone>('/api/milestones', body),
   completeMilestone: (id: string) =>
     post<Milestone>(`/api/milestones/${encodeURIComponent(id)}/complete`),
+  updateMilestone: (id: string, body: { title?: string; description?: string | null; targetDate?: string | null }) =>
+    patch<Milestone>(`/api/milestones/${encodeURIComponent(id)}`, body),
   actions: (goalId: string) =>
     get<Action[]>(`/api/goals/${encodeURIComponent(goalId)}/actions`),
   createAction: (body: {
@@ -257,6 +305,8 @@ export const api = {
   }) => post<Action>('/api/actions', body),
   updateActionStatus: (id: string, status: ActionStatus) =>
     patch<Action>(`/api/actions/${encodeURIComponent(id)}/status`, { status }),
+  updateAction: (id: string, body: { title?: string; description?: string | null }) =>
+    patch<Action>(`/api/actions/${encodeURIComponent(id)}`, body),
   recordExecution: (
     id: string,
     body: {
@@ -270,6 +320,23 @@ export const api = {
     get<Execution | null>(`/api/actions/${encodeURIComponent(id)}/execution`),
   progress: (goalId: string) =>
     get<ProgressSummary>(`/api/progress/goals/${encodeURIComponent(goalId)}`),
+  measurements: (goalId: string) =>
+    get<Measurement[]>(`/api/goals/${encodeURIComponent(goalId)}/measurements`),
+  createMeasurement: (body: { goalId: string; label: string; valueType: Measurement['valueType']; unit?: string | null; targetValue?: number | string | boolean | null }) =>
+    post<Measurement>('/api/measurements', body),
+  updateMeasurement: (id: string, body: { label?: string; unit?: string | null; targetValue?: number | string | boolean | null }) =>
+    patch<Measurement>(`/api/measurements/${encodeURIComponent(id)}`, body),
+  archiveMeasurement: (id: string) => del<Measurement>(`/api/measurements/${encodeURIComponent(id)}`),
+  measurementHistory: (id: string) => get<MeasurementRecord[]>(`/api/measurements/${encodeURIComponent(id)}/history`),
+  recordMeasurement: (id: string, body: { value: number | string | boolean; note?: string }) =>
+    post<MeasurementRecord>(`/api/measurements/${encodeURIComponent(id)}/records`, body),
+  understandGoal: (input: string) => post<AIClarification>('/api/ai/goal-understanding', { input }),
+  assessGoalFeasibility: (input: string) => post<AIFeasibility>('/api/ai/feasibility', { input }),
+  proposeGoalStructure: (input: string) => post<AIProposal>('/api/ai/goal-proposals', { input }),
+  getAIProposal: (id: string) => get<AIProposal>(`/api/ai/proposals/${encodeURIComponent(id)}`),
+  applyAIProposal: (id: string, selection: { selectedItemIds: string[]; editedData: unknown }) =>
+    post<{ proposalId: string; status: string; operations: { operation: string; success: boolean; entityId?: string; errorCode?: string }[] }>(`/api/ai/proposals/${encodeURIComponent(id)}/apply`, { selection }),
+  rejectAIProposal: (id: string) => post<AIProposal>(`/api/ai/proposals/${encodeURIComponent(id)}/reject`),
   createDailyPlan: (date: string) =>
     post<DailyPlan>('/api/planning/daily-plans', { date }),
   dailyPlan: (date: string) =>

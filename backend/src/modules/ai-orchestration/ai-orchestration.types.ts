@@ -38,6 +38,7 @@ export type AIProposalStatus =
   | "PENDING_REVIEW"
   | "EDITED"
   | "APPROVED"
+  | "APPLYING"
   | "PARTIALLY_APPROVED"
   | "REJECTED"
   | "APPLIED"

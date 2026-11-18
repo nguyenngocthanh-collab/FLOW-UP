@@ -9,7 +9,7 @@ describe("AIOrchestrationService", () => {
     context = { buildContext: vi.fn(async (userId, operationType, userInput) => ({ userId, operationType, userInput })) };
     provider = { generate: vi.fn(async () => ({ content: { questions: ["What outcome do you want?"] } })) };
     validator = { validate: vi.fn(async (_operation, output) => ({ valid: true, value: output, issues: [] })) };
-    repo = { create: vi.fn(async p => p), getById: vi.fn(async () => null), update: vi.fn(async p => p) };
+    repo = { create: vi.fn(async p => p), getById: vi.fn(async () => null), update: vi.fn(async p => p), claimForApplication: vi.fn(async () => true) };
     applier = { validateProposal: vi.fn(async () => undefined), applyApprovedProposal: vi.fn(async () => ({ proposalId: "p1", status: "APPLIED" as const, operations: [] })) };
     rules = { validation: { maxInputLength: 1000, maxContextBytes: 10000, maxProposalItems: 20 }, now: () => "2026-11-17T00:00:00.000Z", createProposalId: () => "p1", proposalPersistenceEnabled: false };
     service = new AIOrchestrationService(context, provider, validator, repo, applier, rules);

@@ -1,0 +1,16 @@
+.assistant-layout{display:grid;gap:18px;max-width:980px}
+.assistant-panel{padding:22px;min-width:0}
+.assistant-panel h2{margin:10px 0 8px}
+.assistant-panel h3{font-size:14px;margin:18px 0 7px}
+.assistant-panel ul,.assistant-panel ol{padding-left:22px;color:var(--ink)}
+.assistant-panel li{margin:8px 0}
+.assistant-panel .field{margin:14px 0}
+.assistant-panel .field textarea{min-height:125px}
+.assistant-panel .heading-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:15px}
+.assistant-proposal-list{display:grid;gap:10px;margin:16px 0}
+.assistant-proposal-item{display:flex;align-items:flex-start;gap:12px;border:1px solid var(--line);border-radius:12px;padding:13px;background:var(--paper)}
+.assistant-proposal-item>input{margin-top:5px;accent-color:var(--green)}
+.assistant-proposal-item__body{display:grid;gap:7px;min-width:0;flex:1}
+.assistant-proposal-item__body>input{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--ink);background:#fff}
+.assistant-proposal-item__body small{color:var(--muted);line-height:1.45}
+@media(max-width:640px){.assistant-panel{padding:16px}.assistant-panel .heading-actions{align-items:stretch;flex-direction:column}}

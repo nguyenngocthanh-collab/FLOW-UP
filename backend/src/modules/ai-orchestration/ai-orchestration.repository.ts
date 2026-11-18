@@ -1,6 +1,7 @@
 import type {
   AIProposal, AIProposalSelection, AIProposalApplicationResult, AIRequestContext,
   AIProviderRequest, AIProviderResponse, AIOutputValidationResult, AIOperationType,
+  AIProposalStatus,
 } from "./ai-orchestration.types";
 
 export interface AIContextReader {
@@ -18,7 +19,12 @@ export interface AIOutputValidator {
 export interface AIProposalRepository {
   create(proposal: AIProposal): Promise<AIProposal>;
   getById(proposalId: string): Promise<AIProposal | null>;
-  update(proposal: AIProposal): Promise<AIProposal>;
+  update(proposal: AIProposal, expectedStatus?: AIProposalStatus): Promise<AIProposal>;
+  claimForApplication(proposalId: string, userId: string, updatedAt: string): Promise<boolean>;
+}
+
+export interface AIUsageReservation {
+  reserve(userId: string): boolean;
 }
 
 export interface AIProposalDomainApplier {

@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createApp, type AppInstance } from "../../src/server/app.ts";
 import { createApiHandler } from "../../src/api/index.ts";
 
@@ -37,7 +38,7 @@ async function dispatchInProcess(
             this.push(null);
           }
         }
-      }) as any;
+      }) as unknown as IncomingMessage & { method: string; url: string; headers: Record<string, string> };
 
       const lowerHeaders: Record<string, string> = {};
       if (options.headers) {
@@ -60,8 +61,9 @@ async function dispatchInProcess(
           statusCode = status;
           if (headers) Object.assign(resHeaders, headers);
         },
-        end(chunk?: any) {
-          if (chunk) resBody += chunk.toString();
+        end(chunk?: unknown) {
+          if (typeof chunk === "string") resBody += chunk;
+          else if (Buffer.isBuffer(chunk)) resBody += chunk.toString();
           this.writableEnded = true;
           resolve({
             status: statusCode,
@@ -74,7 +76,7 @@ async function dispatchInProcess(
             }
           });
         }
-      }) as any;
+      }) as unknown as ServerResponse;
 
       handler(req, res).catch(reject);
     } catch (err) {
@@ -155,8 +157,10 @@ describe("FLOW-UP Backend API Integration Tests", () => {
         json: () => res.json(),
         text: () => res.text()
       };
-    } catch (err: any) {
-      if (err?.code === "EACCES" || err?.message?.includes("EACCES") || err?.cause?.code === "EACCES") {
+    } catch (err: unknown) {
+      const details = err && typeof err === "object" ? err as { code?: unknown; message?: unknown; cause?: unknown } : {};
+      const cause = details.cause && typeof details.cause === "object" ? details.cause as { code?: unknown } : {};
+      if (details.code === "EACCES" || (typeof details.message === "string" && details.message.includes("EACCES")) || cause.code === "EACCES") {
         useInProcess = true;
         return dispatchInProcess(targetApp, method, urlPath, options);
       }
@@ -189,7 +193,9 @@ describe("FLOW-UP Backend API Integration Tests", () => {
       { method: "POST", path: "/api/milestones" },
       { method: "POST", path: "/api/actions" },
       { method: "GET", path: "/api/planning/daily-plans/2026-11-18" },
-      { method: "GET", path: "/api/progress/goals/goal-123" }
+      { method: "GET", path: "/api/progress/goals/goal-123" },
+      { method: "GET", path: "/api/goals/goal-123/measurements" },
+      { method: "POST", path: "/api/measurements" },
     ];
 
     for (const ep of endpoints) {
@@ -289,6 +295,7 @@ describe("FLOW-UP Backend API Integration Tests", () => {
   let createdGoalId: string;
   let childGoalId: string;
   let testProjectId: string;
+  let measurementId: string;
 
   it("Flow 4: Create and retrieve Goal and Goal hierarchy", async () => {
     const projListRes = await request("GET", "/api/projects", {
@@ -466,6 +473,40 @@ describe("FLOW-UP Backend API Integration Tests", () => {
     expect(execData.success).toBe(true);
     expect(execData.data.actualDurationMinutes).toBe(45);
 
+    const measurementRes = await request("POST", "/api/measurements", {
+      headers: { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ goalId: createdGoalId, label: "Practice hours", valueType: "NUMBER", unit: "hours", targetValue: 10 })
+    });
+    expect(measurementRes.status).toBe(201);
+    const measurementData = await measurementRes.json<{ data: { id: string; label: string; unit: string } }>();
+    measurementId = measurementData.data.id;
+    expect(measurementData.data.unit).toBe("hours");
+    const invalidMeasurement = await request("POST", "/api/measurements", {
+      headers: { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ goalId: createdGoalId, label: "Invalid unit", valueType: "TEXT", unit: "kg" })
+    });
+    expect(invalidMeasurement.status).toBe(400);
+    const recordRes = await request("POST", `/api/measurements/${measurementId}/records`, {
+      headers: { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ value: 4, note: "This week" })
+    });
+    expect(recordRes.status).toBe(201);
+    const recordData = await recordRes.json<{ data: { value: number } }>();
+    expect(recordData.data.value).toBe(4);
+    const updateMeasurement = await request("PATCH", `/api/measurements/${measurementId}`, {
+      headers: { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "Practice hours logged" })
+    });
+    expect((await updateMeasurement.json<{ data: { label: string } }>()).data.label).toBe("Practice hours logged");
+    const currentRes = await request("GET", `/api/measurements/${measurementId}/current`, {
+      headers: { Authorization: `Bearer ${userA.token}` }
+    });
+    expect((await currentRes.json<{ data: { value: number } }>()).data.value).toBe(4);
+    const historyRes = await request("GET", `/api/measurements/${measurementId}/history`, {
+      headers: { Authorization: `Bearer ${userA.token}` }
+    });
+    expect((await historyRes.json<{ data: Array<{ note: string }> }>()).data[0].note).toBe("This week");
+
     // Retrieve Action Execution data
     const getExecRes = await request("GET", `/api/actions/${actionId}/execution`, {
       headers: { Authorization: `Bearer ${userA.token}` }
@@ -520,12 +561,15 @@ describe("FLOW-UP Backend API Integration Tests", () => {
     expect(progRes.status).toBe(200);
     const progData = await progRes.json<{
       success: boolean;
-      data: { goalId: string; calculationStatus: string; goalProgress: { progressValue: null; calculationStatus: string } };
+      data: { goalId: string; calculationStatus: string; goalProgress: { progressValue: number | null; calculationStatus: string }; actionCompletion: { completedActions: number; completionValue: number | null } | null; measurementProgress: Array<{ currentValue: number; calculationStatus: string }> };
     }>();
     expect(progData.success).toBe(true);
     expect(progData.data.goalId).toBe(createdGoalId);
     expect(progData.data.calculationStatus).toBe("RULE_NOT_CONFIGURED");
     expect(progData.data.goalProgress.progressValue).toBeNull();
+    expect(progData.data.actionCompletion?.completedActions).toBe(1);
+    expect(progData.data.actionCompletion?.completionValue).toBe(100);
+    expect(progData.data.measurementProgress[0]).toMatchObject({ currentValue: 4, calculationStatus: "RULE_NOT_CONFIGURED" });
   });
 
   // FLOW 6: Cross-user data isolation
@@ -549,6 +593,10 @@ describe("FLOW-UP Backend API Integration Tests", () => {
     const crossGoalData = await crossGoalRes.json<{ success: boolean; error: { code: string } }>();
     expect(crossGoalData.success).toBe(false);
     expect(crossGoalData.error.code).toBe("GOAL_ACCESS_DENIED");
+    const crossMeasurementRes = await request("GET", `/api/measurements/${measurementId}`, {
+      headers: { Authorization: `Bearer ${userB.token}` }
+    });
+    expect(crossMeasurementRes.status).toBe(403);
 
     // 3. User B attempts to update User A's Goal
     const crossUpdateGoalRes = await request("PATCH", `/api/goals/${createdGoalId}`, {
@@ -626,6 +674,18 @@ describe("FLOW-UP Backend API Integration Tests", () => {
       const goalJson = await createGoal.json<{ data: { id: string } }>();
       savedGoalId = goalJson.data.id;
 
+      const createdMeasurement = await request("POST", "/api/measurements", {
+        headers: { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ goalId: savedGoalId, label: "Weekly focus", valueType: "NUMBER", unit: "hours", targetValue: 5 })
+      }, server1);
+      expect(createdMeasurement.status).toBe(201);
+      const savedMeasurement = (await createdMeasurement.json<{ data: { id: string } }>()).data;
+      const recordedValue = await request("POST", `/api/measurements/${savedMeasurement.id}/records`, {
+        headers: { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ value: 3 })
+      }, server1);
+      expect(recordedValue.status).toBe(201);
+
       // Create Milestone on Server 1
       const createMs = await request(
         "POST",
@@ -687,6 +747,16 @@ describe("FLOW-UP Backend API Integration Tests", () => {
       expect(retrievedMsJson.data.length).toBe(1);
       expect(retrievedMsJson.data[0].title).toBe("Persistent Milestone Checkpoint");
       expect(retrievedMsJson.data[0].goalId).toBe(savedGoalId);
+
+      const retrievedMeasurements = await request("GET", `/api/goals/${savedGoalId}/measurements`, {
+        headers: { Authorization: `Bearer ${userA.token}` }
+      }, server2);
+      const measurementList = await retrievedMeasurements.json<{ data: Array<{ id: string }> }>();
+      expect(measurementList.data).toHaveLength(1);
+      const retrievedHistory = await request("GET", `/api/measurements/${savedMeasurement.id}/history`, {
+        headers: { Authorization: `Bearer ${userA.token}` }
+      }, server2);
+      expect((await retrievedHistory.json<{ data: Array<{ value: number }> }>()).data[0].value).toBe(3);
     } finally {
       if (server1) await (server1 as AppInstance).close();
       if (server2) await (server2 as AppInstance).close();
@@ -695,6 +765,85 @@ describe("FLOW-UP Backend API Integration Tests", () => {
       } catch {
         // ignore cleanup error
       }
+    }
+  });
+
+  it("keeps AI routes authenticated and degrades cleanly without a provider key", async () => {
+    const unauthorized = await request("POST", "/api/ai/goal-understanding", {
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: "Learn Spanish" }),
+    });
+    expect(unauthorized.status).toBe(401);
+    const unavailable = await request("POST", "/api/ai/goal-understanding", {
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${userA.token}` },
+      body: JSON.stringify({ input: "Learn Spanish" }),
+    });
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.json()).toMatchObject({ success: false, error: { code: "AI_PROVIDER_UNAVAILABLE" } });
+  });
+
+  it("runs a mocked discovery-to-approved-domain-record journey across a database restart", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "flow-up-ai-e2e-"));
+    const dbPath = path.join(tempDir, "flow-up.db");
+    const provider = {
+      async generate(request: { operationType: string }) {
+        if (request.operationType === "GOAL_CLARIFICATION") return { content: {
+          outcome: "Learn conversational Spanish", successCriteria: ["Hold a 10-minute conversation"],
+          knownFacts: ["The user wants to learn Spanish"], assumptions: [], missingInformation: ["Target date"], questions: [],
+        } };
+        if (request.operationType === "GOAL_FEASIBILITY") return { content: {
+          assessment: "INSUFFICIENT_INFORMATION", summary: "A target date and available time are unknown.",
+          concerns: [], alternatives: [], assumptions: [], missingInformation: ["Target date", "Available weekly time"],
+        } };
+        return { content: { summary: "A small starter plan", items: [
+          { id: "root", type: "GOAL", title: "Learn conversational Spanish", description: "", targetDate: null, parentItemId: null, rationale: "Desired outcome" },
+          { id: "checkpoint", type: "MILESTONE", title: "Complete beginner lessons", description: "", targetDate: null, parentItemId: "root", rationale: "First checkpoint" },
+          { id: "practice", type: "ACTION", title: "Practice vocabulary for 15 minutes", description: "", targetDate: null, parentItemId: "checkpoint", rationale: "A manageable first step" },
+          { id: "minutes", type: "MEASUREMENT", title: "Weekly practice time", description: "Record practice time each week.", targetDate: null, parentItemId: "root", rationale: "A measurable signal", valueType: "NUMBER", unit: "minutes", targetValue: null },
+        ] } };
+      },
+    };
+    let first = createApp({ dbPath, config: { auth: { devMode: true }, ai: { provider } } });
+    const auth = { Authorization: `Bearer ${userA.token}`, "Content-Type": "application/json" };
+    const invoke = (target: AppInstance, method: string, url: string, body?: unknown) =>
+      dispatchInProcess(target, method, url, { headers: auth, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    try {
+      expect((await invoke(first, "POST", "/api/workspaces/initialize")).status).toBe(201);
+      expect((await invoke(first, "POST", "/api/ai/goal-understanding", { input: "I want to learn Spanish but do not know where to begin." })).status).toBe(200);
+      expect((await invoke(first, "POST", "/api/ai/feasibility", { input: "I want to learn Spanish but do not know where to begin." })).status).toBe(200);
+      const proposed = await invoke(first, "POST", "/api/ai/goal-proposals", { input: "I want to learn Spanish but do not know where to begin." });
+      expect(proposed.status).toBe(200);
+      const proposal = (await proposed.json<{ data: { id: string; proposalData: { items: { id: string }[] } } }>()).data;
+      expect(proposal.proposalData.items).toHaveLength(4);
+      const applied = await invoke(first, "POST", `/api/ai/proposals/${proposal.id}/apply`, {
+        selection: { selectedItemIds: proposal.proposalData.items.map((item) => item.id), editedData: proposal.proposalData },
+      });
+      expect(applied.status).toBe(200);
+      expect(await applied.json()).toMatchObject({ data: { status: "APPLIED" } });
+      await first.close();
+      first = null as unknown as AppInstance;
+
+      const second = createApp({ dbPath, config: { auth: { devMode: true } } });
+      try {
+        const goals = await invoke(second, "GET", "/api/goals");
+        const goal = (await goals.json<{ data: { id: string; title: string }[] }>()).data[0];
+        expect(goal.title).toBe("Learn conversational Spanish");
+        const milestones = await invoke(second, "GET", `/api/goals/${goal.id}/milestones`);
+        const milestone = (await milestones.json<{ data: { id: string; title: string }[] }>()).data[0];
+        expect(milestone.title).toBe("Complete beginner lessons");
+        const actions = await invoke(second, "GET", `/api/goals/${goal.id}/actions`);
+        expect((await actions.json<{ data: { title: string; milestoneId: string }[] }>()).data[0]).toMatchObject({
+          title: "Practice vocabulary for 15 minutes", milestoneId: milestone.id,
+        });
+        const measurements = await invoke(second, "GET", `/api/goals/${goal.id}/measurements`);
+        expect((await measurements.json<{ data: { label: string; unit: string }[] }>()).data[0]).toMatchObject({ label: "Weekly practice time", unit: "minutes" });
+        const duplicate = await invoke(second, "POST", `/api/ai/proposals/${proposal.id}/apply`, {
+          selection: { selectedItemIds: proposal.proposalData.items.map((item) => item.id), editedData: proposal.proposalData },
+        });
+        expect(duplicate.status).toBe(409);
+      } finally { await second.close(); }
+    } finally {
+      if (first) await first.close();
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });
